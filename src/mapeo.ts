@@ -115,8 +115,10 @@ export function armarCotizacion(entrada: EntradaMapeo, emisorId: string): Result
   const condiciones = [q.termsAndConditions?.trim(), q.paymentTerms?.note?.trim()]
     .filter(Boolean)
     .join('\n\n');
+  // Coreinbox usa el número como título cuando no hay otro; repetirlo no aporta.
+  const titulo = q.title?.trim() && q.title.trim() !== q.quoteNumber ? q.title.trim() : '';
   const observaciones = [
-    `Cotización ${q.quoteNumber} de Coreinbox${q.title ? ` · ${q.title.trim()}` : ''}`,
+    `Cotización ${q.quoteNumber} de Coreinbox${titulo ? ` · ${titulo}` : ''}`,
     q.acceptance?.note?.trim() ? `Nota del cliente al aceptar: ${q.acceptance.note.trim()}` : '',
   ]
     .filter(Boolean)

@@ -1,0 +1,28 @@
+{
+  "name": "@emite-dte/conector-coreinbox",
+  "version": "0.1.0",
+  "description": "Conector Coreinbox → Emite DTE: lleva las cotizaciones aceptadas a facturar y devuelve el folio y el estado del SII al CRM",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "node --env-file-if-exists=.env --import tsx src/index.ts",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "test": "vitest run",
+    "format": "prettier --write \"src/**/*.ts\" \"*.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"*.md\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

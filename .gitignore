@@ -1,0 +1,10 @@
+# Credenciales y datos de la instalación: nunca al repositorio
+.env
+.env.*
+!.env.example
+datos/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo

@@ -33,7 +33,8 @@ export interface CotizacionEmite {
   condiciones?: string;
   observaciones?: string;
   ordenCompra?: { numero: string; fecha?: string };
-  origen: { nombre: string; idExterno: string };
+  /** `numero` es el de Coreinbox («C-3008»): Emite DTE lo muestra y lo cita en vez de su correlativo. */
+  origen: { nombre: string; idExterno: string; numero?: string };
   estado: 'aceptada';
 }
 

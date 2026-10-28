@@ -148,7 +148,7 @@ export function armarCotizacion(entrada: EntradaMapeo, emisorId: string): Result
       2000,
     )!,
     ...conValor('ordenCompra', ordenCompra),
-    origen: { nombre: ORIGEN, idExterno: q.id },
+    origen: { nombre: ORIGEN, idExterno: q.id, numero: q.quoteNumber },
     estado: 'aceptada',
   };
 

@@ -162,7 +162,7 @@ describe('armarCotizacion', () => {
       observaciones:
         'Cotización COT-2026-012 de Coreinbox · Barredoras para bodega\nNota del cliente al aceptar: Despachar a bodega 2',
       ordenCompra: { numero: 'OC-7788' },
-      origen: { nombre: 'coreinbox', idExterno: 'q-1' },
+      origen: { nombre: 'coreinbox', idExterno: 'q-1', numero: 'COT-2026-012' },
       estado: 'aceptada',
     });
     // Por RUT: sólo el RUT y el contacto, para no pisar el catálogo de Emite DTE.

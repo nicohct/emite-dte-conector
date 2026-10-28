@@ -15,7 +15,8 @@ que cambiar ninguno de los dos para instalarlo. Licencia MIT.
    de la aceptación: cantidades, precios y descuentos aceptados; sin ellas, las obligatorias más las
    opcionales elegidas), el cliente por RUT, la OC del cliente (`poNumber` → referencia 801 al
    facturar), vigencia, forma de pago, condiciones y el SKU de cada producto, y la crea con
-   `POST /cotizaciones` (`origen: { nombre: "coreinbox", idExterno: <id de la cotización> }`,
+   `POST /cotizaciones` (`origen: { nombre: "coreinbox", idExterno: <id>, numero: <número de Coreinbox> }`:
+   Emite DTE muestra la cotización con ese número, «C-3008», y lo cita en la factura;
    `estado: "aceptada"`). Si el RUT no está en el catálogo de Emite DTE
    (`RECEPTOR_NO_EXISTE`), la reenvía con el receptor completo y así lo crea.
 3. Anota en el negocio de Coreinbox «Cotización … lista para facturar en Emite DTE (N° …)». Se

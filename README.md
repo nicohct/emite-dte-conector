@@ -98,12 +98,22 @@ pnpm start
 ```
 
 Con Docker, junto al compose de Emite DTE (el conector habla con la API por la red interna y
-recibe los webhooks sin exponer nada a Internet):
+recibe los webhooks sin exponer nada a Internet). `docker-compose.prod.yml` de Emite DTE ya trae
+el servicio bajo el perfil `conector`: se clona este repositorio **junto** a la carpeta de Emite
+DTE (`../emite-dte-conector-coreinbox`), se deja `conector-coreinbox.env` (600) al lado del `.env`
+y se levanta con
+
+```bash
+docker compose -p <proyecto> -f docker-compose.prod.yml --profile conector up -d --build
+```
+
+El servicio equivale a:
 
 ```yaml
 conector-coreinbox:
   build: ../emite-dte-conector-coreinbox
-  env_file: ./privado/conector-coreinbox.env
+  profiles: [conector]
+  env_file: conector-coreinbox.env
   environment:
     EMITE_URL: http://app:3000
   volumes:

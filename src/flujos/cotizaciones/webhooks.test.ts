@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { ActividadNueva, Coreinbox } from './coreinbox.js';
-import { Estado } from './estado.js';
-import { procesarWebhook } from './servidor.js';
-import { decidir, firmar, verificarFirma, type EventoEmite } from './webhooks.js';
+import type { ActividadNueva, Coreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import { Estado } from '../../estado.js';
+import { procesarWebhook } from '../../servidor.js';
+import { firmar, verificarFirma } from '../../adaptadores/emite/firma.js';
+import { decidir, type EventoEmite } from './webhooks.js';
 
 const SECRETO = 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw'; // gitleaks:allow (vector público de Standard Webhooks)
 

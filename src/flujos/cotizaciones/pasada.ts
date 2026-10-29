@@ -4,14 +4,13 @@
  * `docs/api-claves.md` §6: cursor = `meta.timestamp` de la primera página menos 5 minutos,
  * entrega al menos una vez, deduplicación por id (la nuestra y la de Emite DTE por `origen`).
  */
-import type { Coreinbox, CotizacionResumen } from './coreinbox.js';
-import { ErrorCoreinbox } from './coreinbox.js';
-import { EmiteDte, ErrorEmite } from './emite.js';
-import type { Estado } from './estado.js';
-import { log } from './log.js';
-import { ErrorMapeo, armarCotizacion } from './mapeo.js';
-
-export const MARGEN_CURSOR_MS = 5 * 60 * 1000;
+import type { Coreinbox, CotizacionResumen } from '../../adaptadores/coreinbox/cliente.js';
+import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import { EmiteDte, ErrorEmite } from '../../adaptadores/emite/cliente.js';
+import type { Estado } from '../../estado.js';
+import { log } from '../../log.js';
+import { ErrorMapeo, MARGEN_CURSOR_MS } from '../comun.js';
+import { armarCotizacion } from './mapeo.js';
 
 export interface Dependencias {
   coreinbox: Coreinbox;

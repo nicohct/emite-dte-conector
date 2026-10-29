@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { CategoriaCoreinbox, Coreinbox, ProductoCoreinbox } from './coreinbox.js';
-import { ErrorCoreinbox } from './coreinbox.js';
+import type {
+  CategoriaCoreinbox,
+  Coreinbox,
+  ProductoCoreinbox,
+} from '../../adaptadores/coreinbox/cliente.js';
+import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
 import {
   EmiteDte,
   ErrorEmite,
   type CambiosProducto,
   type ProductoEmite,
   type ProductoNuevo,
-} from './emite.js';
-import { Estado } from './estado.js';
-import { pasadaProductos } from './productos.js';
-import { MARGEN_CURSOR_MS } from './sincronizar.js';
+} from '../../adaptadores/emite/cliente.js';
+import { Estado } from '../../estado.js';
+import { MARGEN_CURSOR_MS } from '../comun.js';
+import { pasadaProductos } from './pasada.js';
 
 const EMISOR = '11111111-1111-1111-1111-111111111111';
 const TS = '2026-10-28T15:00:02.113Z';

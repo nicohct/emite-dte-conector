@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { CategoriaCoreinbox, ProductoCoreinbox } from './coreinbox.js';
-import { ErrorMapeo } from './mapeo.js';
-import { armarProducto, unidadEmite } from './mapeo-productos.js';
+import type { CategoriaCoreinbox, ProductoCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import { ErrorMapeo } from '../comun.js';
+import { armarProducto, unidadEmite } from './mapeo.js';
 
 const EMISOR = '11111111-1111-1111-1111-111111111111';
 

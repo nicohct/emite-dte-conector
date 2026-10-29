@@ -4,11 +4,12 @@ import type {
   Coreinbox,
   CotizacionCoreinbox,
   CotizacionResumen,
-} from './coreinbox.js';
-import { ErrorCoreinbox } from './coreinbox.js';
-import { EmiteDte, ErrorEmite, type CotizacionEmite } from './emite.js';
-import { Estado } from './estado.js';
-import { MARGEN_CURSOR_MS, pasada } from './sincronizar.js';
+} from '../../adaptadores/coreinbox/cliente.js';
+import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import { EmiteDte, ErrorEmite, type CotizacionEmite } from '../../adaptadores/emite/cliente.js';
+import { Estado } from '../../estado.js';
+import { MARGEN_CURSOR_MS } from '../comun.js';
+import { pasada } from './pasada.js';
 
 const EMISOR = '11111111-1111-1111-1111-111111111111';
 const TS = '2026-10-28T15:00:02.113Z';

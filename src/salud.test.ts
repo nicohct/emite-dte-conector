@@ -68,16 +68,30 @@ describe('Salud', () => {
     const salud = new Salud(new Estado(':memory:'), ACTIVOS);
     const en = new Date('2026-10-29T12:00:00.000Z');
     salud.registrarPasada('cotizaciones', { revisadas: 2, creadas: 2 }, en);
-    salud.registrarFalla('productos', new Error('Coreinbox no responde'), true, en);
+    salud.registrarFalla(
+      'cotizaciones',
+      new ErrorCoreinbox(0, 'RED', 'Coreinbox no responde: http://interno'),
+      true,
+      en,
+    );
+    salud.registrarFalla('productos', new TypeError('dato raro de 76000000-0'), false, en);
     const { flujos } = salud.respuesta();
     expect(flujos.cotizaciones.ultimaPasada).toEqual({
       en: '2026-10-29T12:00:00.000Z',
       resultado: { revisadas: 2, creadas: 2 },
     });
+    // Sólo código y status: el mensaje puede traer datos del otro sistema y queda en el log.
+    expect(flujos.cotizaciones.ultimaFalla).toEqual({
+      en: '2026-10-29T12:00:00.000Z',
+      codigo: 'RED',
+      status: 0,
+      transitorio: true,
+    });
     expect(flujos.productos.ultimaFalla).toEqual({
       en: '2026-10-29T12:00:00.000Z',
-      error: 'Error: Coreinbox no responde',
-      transitorio: true,
+      codigo: 'TypeError',
+      status: null,
+      transitorio: false,
     });
   });
 

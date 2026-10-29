@@ -2,6 +2,9 @@
  * Lo que responde `GET /salud`: por cada flujo, si está encendido, su cursor, sus contadores (del
  * estado en SQLite) y la última pasada y la última falla (en memoria, se pierden al reiniciar).
  * Mantiene además las claves de antes (`creadas`, `conError`, `productos`) para lo que ya las lee.
+ *
+ * `/salud` no lleva autenticación: de una falla muestra sólo el código y el status HTTP, nunca el
+ * mensaje (puede traer datos del otro sistema); el mensaje completo queda en el log.
  */
 import type { NombreFlujo } from './config.js';
 import type { Estado, Resumen } from './estado.js';
@@ -13,7 +16,10 @@ export interface UltimaPasada {
 
 export interface UltimaFalla {
   en: string;
-  error: string;
+  /** `RED`, `HTTP_503`, el `code` del sistema que respondió o el nombre del error. */
+  codigo: string;
+  /** Status HTTP de la respuesta; 0 si no hubo respuesta, `null` si no fue una falla de HTTP. */
+  status: number | null;
   /** Red, 5xx o límite de peticiones: se reintenta sola en el intervalo siguiente. */
   transitorio: boolean;
 }
@@ -64,7 +70,16 @@ export class Salud {
   }
 
   registrarFalla(flujo: FlujoActivo, error: unknown, transitorio: boolean, en = new Date()): void {
-    this.actividad[flujo].ultimaFalla = { en: en.toISOString(), error: String(error), transitorio };
+    const deHttp =
+      error instanceof Error && 'code' in error && 'status' in error
+        ? { codigo: String(error.code), status: Number(error.status) }
+        : null;
+    this.actividad[flujo].ultimaFalla = {
+      en: en.toISOString(),
+      codigo: deHttp?.codigo ?? (error instanceof Error ? error.name : 'Error'),
+      status: deHttp?.status ?? null,
+      transitorio,
+    };
   }
 
   respuesta(): RespuestaSalud {

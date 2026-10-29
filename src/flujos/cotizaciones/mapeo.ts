@@ -8,21 +8,17 @@ import type {
   CotizacionCoreinbox,
   EmpresaCoreinbox,
   LineaCoreinbox,
-} from './coreinbox.js';
-import type { CotizacionEmite, ItemEmite, ReceptorCompleto } from './emite.js';
+} from '../../adaptadores/coreinbox/cliente.js';
+import type {
+  CotizacionEmite,
+  ItemEmite,
+  ReceptorCompleto,
+} from '../../adaptadores/emite/cliente.js';
+import { ErrorMapeo, conValor, corta, num } from '../comun.js';
+
+export { ErrorMapeo };
 
 export const ORIGEN = 'coreinbox';
-
-/** Un dato de la cotización que Emite DTE no puede recibir: se anota en el CRM, no se reintenta. */
-export class ErrorMapeo extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ErrorMapeo';
-  }
-}
 
 export interface EntradaMapeo {
   cotizacion: CotizacionCoreinbox;
@@ -40,13 +36,6 @@ export interface ResultadoMapeo {
   receptor: ReceptorCompleto;
   avisos: string[];
 }
-
-export const num = (v: string | number | null | undefined): number =>
-  v === null || v === undefined || v === '' ? 0 : Number(v);
-export const corta = (s: string | null | undefined, largo: number): string | undefined => {
-  const t = s?.trim();
-  return t ? (t.length > largo ? t.slice(0, largo) : t) : undefined;
-};
 
 /** RUT como lo recibe Emite DTE: sin puntos, con guion y dígito verificador en mayúscula. */
 export function normalizarRut(valor: string): string | null {
@@ -158,13 +147,6 @@ export function armarCotizacion(entrada: EntradaMapeo, emisorId: string): Result
     receptor,
     avisos,
   };
-}
-
-export function conValor<K extends string, V>(
-  clave: K,
-  valor: V | undefined,
-): Partial<Record<K, V>> {
-  return valor === undefined ? {} : ({ [clave]: valor } as Record<K, V>);
 }
 
 function formaPago(terminos: CotizacionCoreinbox['paymentTerms']): 1 | 2 | undefined {

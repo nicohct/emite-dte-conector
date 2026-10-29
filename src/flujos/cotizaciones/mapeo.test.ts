@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CotizacionCoreinbox, EmpresaCoreinbox } from './coreinbox.js';
+import type { CotizacionCoreinbox, EmpresaCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
 import { ErrorMapeo, armarCotizacion, normalizarRut } from './mapeo.js';
 
 const EMISOR = '11111111-1111-1111-1111-111111111111';

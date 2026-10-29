@@ -1,35 +1,11 @@
 /**
- * Recepción de los webhooks firmados de Emite DTE (Standard Webhooks) y su traducción a una
- * actividad en el negocio de Coreinbox: folio, estado ante el SII, correo enviado.
+ * La vuelta del flujo de cotizaciones: traduce un webhook de Emite DTE (ya verificado, ver
+ * `adaptadores/emite/firma.ts`) a una actividad en el negocio de Coreinbox: folio, estado ante el
+ * SII, correo enviado.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { ActividadNueva } from './coreinbox.js';
-import type { FilaCotizacion } from './estado.js';
+import type { ActividadNueva } from '../../adaptadores/coreinbox/cliente.js';
+import type { FilaCotizacion } from '../../estado.js';
 import { ORIGEN } from './mapeo.js';
-
-export const TOLERANCIA_S = 300;
-
-/** `v1,<base64>` de HMAC-SHA256 sobre `id.timestamp.cuerpo` con los bytes del secreto `whsec_`. */
-export function firmar(secreto: string, id: string, timestamp: number, cuerpo: string): string {
-  const llave = Buffer.from(secreto.replace(/^whsec_/, ''), 'base64');
-  return `v1,${createHmac('sha256', llave).update(`${id}.${timestamp}.${cuerpo}`).digest('base64')}`;
-}
-
-export function verificarFirma(
-  secreto: string,
-  headers: { id?: string | undefined; timestamp?: string | undefined; firma?: string | undefined },
-  cuerpo: string,
-  ahora = Date.now(),
-): boolean {
-  if (!headers.id || !headers.timestamp || !headers.firma) return false;
-  const ts = Number(headers.timestamp);
-  if (!Number.isInteger(ts) || Math.abs(ahora / 1000 - ts) > TOLERANCIA_S) return false;
-  const esperada = Buffer.from(firmar(secreto, headers.id, ts, cuerpo));
-  return headers.firma.split(' ').some((f) => {
-    const recibida = Buffer.from(f);
-    return recibida.length === esperada.length && timingSafeEqual(recibida, esperada);
-  });
-}
 
 export interface EventoEmite {
   id: string;

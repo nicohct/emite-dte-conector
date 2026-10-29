@@ -9,15 +9,18 @@
  * fusionado en otro) recibe sólo el nombre y el precio nuevos; lo demás (descripción, unidad,
  * categoría, exento, activo) se respeta como esté en Emite DTE.
  */
-import type { CategoriaCoreinbox, Coreinbox, ProductoCoreinbox } from './coreinbox.js';
-import { ErrorCoreinbox } from './coreinbox.js';
-import type { CambiosProducto, EmiteDte, ProductoEmite } from './emite.js';
-import { ErrorEmite } from './emite.js';
-import type { Estado } from './estado.js';
-import { log } from './log.js';
-import { ErrorMapeo } from './mapeo.js';
-import { armarProducto } from './mapeo-productos.js';
-import { MARGEN_CURSOR_MS } from './sincronizar.js';
+import type {
+  CategoriaCoreinbox,
+  Coreinbox,
+  ProductoCoreinbox,
+} from '../../adaptadores/coreinbox/cliente.js';
+import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import type { CambiosProducto, EmiteDte, ProductoEmite } from '../../adaptadores/emite/cliente.js';
+import { ErrorEmite } from '../../adaptadores/emite/cliente.js';
+import type { Estado } from '../../estado.js';
+import { log } from '../../log.js';
+import { ErrorMapeo, MARGEN_CURSOR_MS } from '../comun.js';
+import { armarProducto } from './mapeo.js';
 
 export interface DependenciasProductos {
   coreinbox: Coreinbox;

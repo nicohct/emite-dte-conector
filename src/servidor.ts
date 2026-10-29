@@ -1,9 +1,10 @@
 /** Receptor HTTP de los webhooks de Emite DTE (`POST /webhooks`) y `GET /salud`. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { Coreinbox } from './coreinbox.js';
+import type { Coreinbox } from './adaptadores/coreinbox/cliente.js';
+import { verificarFirma } from './adaptadores/emite/firma.js';
 import type { Estado } from './estado.js';
 import { log } from './log.js';
-import { decidir, verificarFirma, type EventoEmite } from './webhooks.js';
+import { decidir, type EventoEmite } from './flujos/cotizaciones/webhooks.js';
 
 export interface DependenciasServidor {
   coreinbox: Coreinbox;
@@ -15,19 +16,25 @@ export interface DependenciasServidor {
 
 const MAX_CUERPO = 256 * 1024;
 
-export function crearServidor(d: DependenciasServidor): Server {
+/** `salud` arma la respuesta de `GET /salud` (ver `salud.ts`). */
+export function crearServidor(d: DependenciasServidor, salud: () => unknown): Server {
   return createServer((req, res) => {
-    void atender(d, req, res).catch((e) => {
+    void atender(d, salud, req, res).catch((e) => {
       log('error', 'error atendiendo la petición', { error: String(e) });
       responder(res, 500, { error: 'interno' });
     });
   });
 }
 
-async function atender(d: DependenciasServidor, req: IncomingMessage, res: ServerResponse) {
+async function atender(
+  d: DependenciasServidor,
+  salud: () => unknown,
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
   const url = new URL(req.url ?? '/', 'http://conector');
   if (req.method === 'GET' && url.pathname === '/salud') {
-    return responder(res, 200, { ok: true, ...d.estado.resumen() });
+    return responder(res, 200, salud());
   }
   if (req.method !== 'POST' || url.pathname !== '/webhooks') {
     return responder(res, 404, { error: 'no existe' });

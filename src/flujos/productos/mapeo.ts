@@ -8,9 +8,9 @@
  *   miran. Otra moneda no viaja.
  * - `exento` si el producto no lleva impuesto (`isTaxable: false`) o su `taxRate` es 0.
  */
-import type { CategoriaCoreinbox, ProductoCoreinbox } from './coreinbox.js';
-import type { ProductoNuevo } from './emite.js';
-import { ErrorMapeo, conValor, corta, num } from './mapeo.js';
+import type { CategoriaCoreinbox, ProductoCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import type { ProductoNuevo } from '../../adaptadores/emite/cliente.js';
+import { ErrorMapeo, conValor, corta, num } from '../comun.js';
 
 export const LARGO_CODIGO = 35;
 export const LARGO_NOMBRE = 80;

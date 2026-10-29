@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  CategoriaCoreinbox,
-  Coreinbox,
-  ProductoCoreinbox,
-} from '../../adaptadores/coreinbox/cliente.js';
-import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import type { CategoriaCoreinbox, ProductoCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import { Coreinbox, ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
 import {
   EmiteDte,
   ErrorEmite,
@@ -298,5 +294,54 @@ describe('pasadaProductos', () => {
     expect(deps.estado.cursorProductos).toBe(
       new Date(Date.parse(TS) - MARGEN_CURSOR_MS).toISOString(),
     );
+  });
+});
+
+/**
+ * `fetch` doble por ruta («GET host/ruta», sin query) para los clientes reales: registra cada
+ * petición, responde con el sobre de Coreinbox lo que está en `rutas` y lo demás es la red caída.
+ */
+function red(rutas: Record<string, unknown>) {
+  const peticiones: string[] = [];
+  const http = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(entrada));
+    const peticion = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
+    peticiones.push(peticion);
+    if (!(peticion in rutas)) throw new TypeError('fetch failed');
+    return new Response(
+      JSON.stringify({ success: true, data: rutas[peticion], meta: { timestamp: TS } }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }) as typeof fetch;
+  return {
+    peticiones,
+    coreinbox: new Coreinbox('https://crm.test', 'cik_prueba', http),
+    emite: new EmiteDte('https://emite.test', 'edte_prueba', http),
+  };
+}
+
+describe('pasadaProductos con la red de Coreinbox caída', () => {
+  it('al pedir las categorías de un producto: queda pendiente, sin cursor y sin crear nada', async () => {
+    const { peticiones, coreinbox, emite } = red({
+      'GET crm.test/api/v1/products': {
+        items: [producto('p1', { categoryId: 'cat-1' })],
+        nextCursor: null,
+      },
+    });
+    const estado = new Estado(':memory:');
+    const resultado = await pasadaProductos({
+      coreinbox,
+      emite,
+      estado,
+      emisorId: EMISOR,
+      desde: '2026-10-01T00:00:00.000Z',
+    });
+    expect(resultado).toEqual({ ...sinNovedad, revisados: 1, pendientes: 1 });
+    expect(estado.producto('p1')).toBeNull();
+    expect(estado.cursorProductos).toBeNull();
+    expect(peticiones).toEqual([
+      'GET crm.test/api/v1/products',
+      'GET crm.test/api/v1/products/categories',
+    ]);
   });
 });

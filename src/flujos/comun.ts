@@ -39,9 +39,12 @@ export function conValor<K extends string, V>(
 
 /**
  * Una falla que se arregla sola reintentando (red, 5xx, 429), para el log y `GET /salud` cuando una
- * pasada completa falla. La red caída (`status` 0) cuenta como transitoria en los tres sistemas.
+ * pasada completa falla y para decidir si un elemento queda pendiente dentro de una pasada. La red
+ * caída (`status` 0) cuenta como transitoria en los tres sistemas.
  */
-export function esTransitorio(e: unknown): boolean {
-  if (e instanceof ErrorCoreinbox) return e.transitorio || e.status === 0;
-  return (e instanceof ErrorEmite || e instanceof ErrorWoo) && e.transitorio;
+export function esTransitorio(e: unknown): e is ErrorCoreinbox | ErrorEmite | ErrorWoo {
+  return (
+    (e instanceof ErrorCoreinbox || e instanceof ErrorEmite || e instanceof ErrorWoo) &&
+    e.transitorio
+  );
 }

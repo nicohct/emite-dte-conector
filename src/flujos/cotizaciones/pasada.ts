@@ -9,7 +9,7 @@ import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
 import { EmiteDte, ErrorEmite } from '../../adaptadores/emite/cliente.js';
 import type { Estado } from '../../estado.js';
 import { log } from '../../log.js';
-import { ErrorMapeo, MARGEN_CURSOR_MS } from '../comun.js';
+import { ErrorMapeo, MARGEN_CURSOR_MS, esTransitorio } from '../comun.js';
 import { armarCotizacion } from './mapeo.js';
 
 export interface Dependencias {
@@ -125,7 +125,7 @@ async function procesar(
     });
     return 'creadas';
   } catch (e) {
-    if ((e instanceof ErrorEmite || e instanceof ErrorCoreinbox) && e.transitorio) {
+    if (esTransitorio(e)) {
       log('warn', 'falla transitoria; se reintenta en la pasada siguiente', {
         ...contexto,
         error: e.message,

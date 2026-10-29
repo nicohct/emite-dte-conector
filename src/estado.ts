@@ -1,7 +1,8 @@
 /**
- * Lo que el conector recuerda entre pasadas, en SQLite (`node:sqlite`, sin dependencias): el
- * cursor de sincronización, qué cotización de Coreinbox quedó en Emite DTE (o con qué error) y
- * qué webhooks ya se procesaron.
+ * Lo que el conector recuerda entre pasadas, en SQLite (`node:sqlite`, sin dependencias): los
+ * cursores de sincronización (cotizaciones y productos), qué cotización de Coreinbox quedó en
+ * Emite DTE (o con qué error), qué producto pasó al catálogo (o por qué se omitió) y qué webhooks
+ * ya se procesaron.
  */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -26,6 +27,27 @@ export interface FilaCotizacion {
   actualizadoEn: string;
 }
 
+/**
+ * `sincronizado`: está en el catálogo de Emite DTE (creado o al día). `omitido`: no viaja por un
+ * dato de Coreinbox (sin SKU, otra moneda, inactivo…). `error`: Emite DTE lo rechazó (4xx).
+ */
+export type EstadoProducto = 'sincronizado' | 'omitido' | 'error';
+
+export interface FilaProducto {
+  productId: string;
+  sku: string | null;
+  estado: EstadoProducto;
+  emiteId: string | null;
+  error: string | null;
+  actualizadoEn: string;
+}
+
+export interface Resumen {
+  creadas: number;
+  conError: number;
+  productos: { sincronizados: number; omitidos: number; conError: number };
+}
+
 export class Estado {
   private readonly db: DatabaseSync;
 
@@ -47,25 +69,34 @@ export class Estado {
         error TEXT,
         actualizado_en TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS productos (
+        product_id TEXT PRIMARY KEY,
+        sku TEXT,
+        estado TEXT NOT NULL,
+        emite_id TEXT,
+        error TEXT,
+        actualizado_en TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS webhooks_vistos (id TEXT PRIMARY KEY, visto_en TEXT NOT NULL);
     `);
   }
 
+  /** Cursor de las cotizaciones aceptadas. */
   get cursor(): string | null {
-    const fila = this.db.prepare('SELECT valor FROM claves WHERE clave = ?').get('cursor') as
-      { valor: string } | undefined;
-    return fila?.valor ?? null;
+    return this.clave('cursor');
   }
 
   set cursor(valor: string | null) {
-    if (valor === null) this.db.prepare('DELETE FROM claves WHERE clave = ?').run('cursor');
-    else {
-      this.db
-        .prepare(
-          'INSERT INTO claves (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
-        )
-        .run('cursor', valor);
-    }
+    this.guardarClave('cursor', valor);
+  }
+
+  /** Cursor de los productos; independiente del de cotizaciones. */
+  get cursorProductos(): string | null {
+    return this.clave('cursor_productos');
+  }
+
+  set cursorProductos(valor: string | null) {
+    this.guardarClave('cursor_productos', valor);
   }
 
   cotizacion(quoteId: string): FilaCotizacion | null {
@@ -105,6 +136,40 @@ export class Estado {
       );
   }
 
+  producto(productId: string): FilaProducto | null {
+    const f = this.db.prepare('SELECT * FROM productos WHERE product_id = ?').get(productId) as
+      Record<string, unknown> | undefined;
+    return f
+      ? {
+          productId: f.product_id as string,
+          sku: (f.sku as string | null) ?? null,
+          estado: f.estado as EstadoProducto,
+          emiteId: (f.emite_id as string | null) ?? null,
+          error: (f.error as string | null) ?? null,
+          actualizadoEn: f.actualizado_en as string,
+        }
+      : null;
+  }
+
+  guardarProducto(fila: Omit<FilaProducto, 'actualizadoEn'>): void {
+    this.db
+      .prepare(
+        `INSERT INTO productos (product_id, sku, estado, emite_id, error, actualizado_en)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(product_id) DO UPDATE SET
+           sku = excluded.sku, estado = excluded.estado, emite_id = excluded.emite_id,
+           error = excluded.error, actualizado_en = excluded.actualizado_en`,
+      )
+      .run(
+        fila.productId,
+        fila.sku,
+        fila.estado,
+        fila.emiteId,
+        fila.error,
+        new Date().toISOString(),
+      );
+  }
+
   /** Marca el webhook como visto; devuelve false si ya lo estaba (entrega repetida). */
   marcarWebhook(id: string): boolean {
     const r = this.db
@@ -113,17 +178,49 @@ export class Estado {
     return r.changes === 1;
   }
 
-  resumen(): { creadas: number; conError: number } {
-    const f = this.db
+  resumen(): Resumen {
+    const c = this.db
       .prepare(
         `SELECT SUM(estado = 'creada') AS creadas, SUM(estado = 'error') AS con_error FROM cotizaciones`,
       )
       .get() as { creadas: number | null; con_error: number | null };
-    return { creadas: f.creadas ?? 0, conError: f.con_error ?? 0 };
+    const p = this.db
+      .prepare(
+        `SELECT SUM(estado = 'sincronizado') AS sincronizados, SUM(estado = 'omitido') AS omitidos,
+                SUM(estado = 'error') AS con_error
+         FROM productos`,
+      )
+      .get() as { sincronizados: number | null; omitidos: number | null; con_error: number | null };
+    return {
+      creadas: c.creadas ?? 0,
+      conError: c.con_error ?? 0,
+      productos: {
+        sincronizados: p.sincronizados ?? 0,
+        omitidos: p.omitidos ?? 0,
+        conError: p.con_error ?? 0,
+      },
+    };
   }
 
   cerrar(): void {
     this.db.close();
+  }
+
+  private clave(nombre: string): string | null {
+    const fila = this.db.prepare('SELECT valor FROM claves WHERE clave = ?').get(nombre) as
+      { valor: string } | undefined;
+    return fila?.valor ?? null;
+  }
+
+  private guardarClave(nombre: string, valor: string | null): void {
+    if (valor === null) this.db.prepare('DELETE FROM claves WHERE clave = ?').run(nombre);
+    else {
+      this.db
+        .prepare(
+          'INSERT INTO claves (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
+        )
+        .run(nombre, valor);
+    }
   }
 }
 

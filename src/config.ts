@@ -8,8 +8,10 @@ export interface Config {
     emisorId: string;
     webhookSecret: string;
   };
-  /** Primer `updatedSince` cuando todavía no hay cursor guardado. */
+  /** Primer `updatedSince` cuando todavía no hay cursor guardado (cotizaciones y productos). */
   desde: string;
+  /** Llevar también los productos de Coreinbox al catálogo de Emite DTE (apagado por omisión). */
+  sincronizarProductos: boolean;
   intervaloS: number;
   puerto: number;
   estadoRuta: string;
@@ -41,6 +43,9 @@ export function leerConfig(env: NodeJS.ProcessEnv = process.env): Config {
       webhookSecret: exigir('EMITE_WEBHOOK_SECRET'),
     },
     desde,
+    sincronizarProductos: ['true', '1', 'si', 'sí'].includes(
+      (env.SINCRONIZAR_PRODUCTOS ?? '').trim().toLowerCase(),
+    ),
     intervaloS: Math.max(10, Number(env.INTERVALO_S) || 60),
     puerto: Number(env.PUERTO) || 8080,
     estadoRuta: env.ESTADO_RUTA?.trim() || './datos/estado.sqlite',

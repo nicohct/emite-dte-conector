@@ -3,6 +3,7 @@ import { Coreinbox } from './coreinbox.js';
 import { EmiteDte } from './emite.js';
 import { Estado } from './estado.js';
 import { log } from './log.js';
+import { pasadaProductos } from './productos.js';
 import { crearServidor } from './servidor.js';
 import { pasada } from './sincronizar.js';
 
@@ -19,7 +20,11 @@ const servidor = crearServidor({
   tipoActividad: config.coreinbox.tipoActividad,
 });
 servidor.listen(config.puerto, () =>
-  log('info', 'conector escuchando', { puerto: config.puerto, estado: estado.resumen() }),
+  log('info', 'conector escuchando', {
+    puerto: config.puerto,
+    sincronizarProductos: config.sincronizarProductos,
+    estado: estado.resumen(),
+  }),
 );
 
 let detener = false;
@@ -40,6 +45,22 @@ async function bucle() {
       if (r.revisadas > 0) log('info', 'pasada terminada', { ...r });
     } catch (e) {
       log('error', 'la pasada falló; se reintenta en el intervalo siguiente', { error: String(e) });
+    }
+    if (config.sincronizarProductos && !detener) {
+      try {
+        const r = await pasadaProductos({
+          coreinbox,
+          emite,
+          estado,
+          emisorId: config.emite.emisorId,
+          desde: config.desde,
+        });
+        if (r.revisados > 0) log('info', 'pasada de productos terminada', { ...r });
+      } catch (e) {
+        log('error', 'la pasada de productos falló; se reintenta en el intervalo siguiente', {
+          error: String(e),
+        });
+      }
     }
     await dormir(config.intervaloS * 1000);
   }

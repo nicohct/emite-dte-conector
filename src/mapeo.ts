@@ -41,9 +41,9 @@ export interface ResultadoMapeo {
   avisos: string[];
 }
 
-const num = (v: string | number | null | undefined): number =>
+export const num = (v: string | number | null | undefined): number =>
   v === null || v === undefined || v === '' ? 0 : Number(v);
-const corta = (s: string | null | undefined, largo: number): string | undefined => {
+export const corta = (s: string | null | undefined, largo: number): string | undefined => {
   const t = s?.trim();
   return t ? (t.length > largo ? t.slice(0, largo) : t) : undefined;
 };
@@ -160,7 +160,10 @@ export function armarCotizacion(entrada: EntradaMapeo, emisorId: string): Result
   };
 }
 
-function conValor<K extends string, V>(clave: K, valor: V | undefined): Partial<Record<K, V>> {
+export function conValor<K extends string, V>(
+  clave: K,
+  valor: V | undefined,
+): Partial<Record<K, V>> {
   return valor === undefined ? {} : ({ [clave]: valor } as Record<K, V>);
 }
 

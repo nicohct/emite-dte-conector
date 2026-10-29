@@ -1,7 +1,8 @@
 /**
  * Cliente de la API de Coreinbox con clave `cik_…` (docs/api-claves.md del CRM). Sólo lo que el
  * conector necesita: cotizaciones aceptadas desde una fecha, su detalle, la empresa, el contacto,
- * el producto (por el SKU) y anotar actividades en el negocio.
+ * el producto (por el SKU), los productos cambiados desde una fecha con sus categorías, y anotar
+ * actividades en el negocio.
  */
 
 export interface PaginaCotizaciones {
@@ -90,6 +91,38 @@ export interface ContactoCoreinbox {
   email: string | null;
 }
 
+/** Un producto del catálogo de Coreinbox (`GET /products`); Decimal llega como texto. */
+export interface ProductoCoreinbox {
+  id: string;
+  sku: string | null;
+  name: string;
+  description: string | null;
+  /** `product`, `service`, `license` o `subscription`. */
+  type: string;
+  unit: string | null;
+  unitPrice: string | number;
+  currencyCode: string;
+  isTaxable: boolean;
+  /** Fracción entre 0 y 1 (0.19 = 19 %). */
+  taxRate: string | number | null;
+  categoryId: string | null;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface CategoriaCoreinbox {
+  id: string;
+  name: string;
+  parentId: string | null;
+}
+
+export interface PaginaProductos {
+  items: ProductoCoreinbox[];
+  nextCursor: string | null;
+  /** `meta.timestamp` del servidor: es lo que se guarda como cursor de la pasada siguiente. */
+  timestamp: string;
+}
+
 export interface ActividadNueva {
   typeId: string;
   title: string;
@@ -164,6 +197,25 @@ export class Coreinbox {
       if (e instanceof ErrorCoreinbox && !e.transitorio) return null;
       throw e;
     }
+  }
+
+  /** Productos cambiados desde `desde` (`updatedSince`), en páginas de 100; sin los eliminados. */
+  async listarProductos(desde: string, cursor?: string): Promise<PaginaProductos> {
+    const q = new URLSearchParams({ updatedSince: desde, limit: '100' });
+    if (cursor) q.set('cursor', cursor);
+    const { data, meta } = await this.pedir<{
+      items: ProductoCoreinbox[];
+      nextCursor?: string | null;
+    }>('GET', `/products?${q}`);
+    return {
+      items: data.items,
+      nextCursor: data.nextCursor ?? null,
+      timestamp: meta?.timestamp ?? new Date().toISOString(),
+    };
+  }
+
+  async categorias(): Promise<CategoriaCoreinbox[]> {
+    return (await this.pedir<CategoriaCoreinbox[]>('GET', '/products/categories')).data;
   }
 
   async crearActividad(actividad: ActividadNueva): Promise<string> {

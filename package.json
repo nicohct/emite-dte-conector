@@ -1,7 +1,7 @@
 {
-  "name": "@emite-dte/conector-coreinbox",
+  "name": "@emite-dte/conector",
   "version": "0.1.0",
-  "description": "Conector Coreinbox → Emite DTE: lleva las cotizaciones aceptadas a facturar y devuelve el folio y el estado del SII al CRM",
+  "description": "Conector de Emite DTE: hub que integra Emite DTE con Coreinbox y WooCommerce por adaptadores y flujos encendibles (cotizaciones aceptadas, catálogo de productos y, más adelante, pedidos web)",
   "license": "MIT",
   "type": "module",
   "private": true,
@@ -15,6 +15,7 @@
     "dev": "node --env-file-if-exists=.env --import tsx src/index.ts",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "test": "vitest run",
+    "verificar:woo": "node --env-file-if-exists=.env --import tsx src/adaptadores/woocommerce/verificar.ts",
     "format": "prettier --write \"src/**/*.ts\" \"*.md\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"*.md\""
   },

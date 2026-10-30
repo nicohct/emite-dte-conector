@@ -82,14 +82,14 @@ function emiteDe(e: Evento, enlaces: Enlaces): Html {
   if (e.tipo !== 'cotizacion') return html`<span class="id">${e.emiteId}</span>`;
   return enlaceExterno(
     enlaces.emite ? `${enlaces.emite}/cotizaciones/${e.emiteId}` : null,
-    e.emiteId,
+    e.emiteNumero === null ? e.emiteId : `N° ${e.emiteNumero}`,
   );
 }
 
 /** Coreinbox no tiene URL pública en la configuración: los ids van sin enlace. */
 function origenDe(e: Evento): Html {
   const id = html`<span class="id tenue">${e.idExterno ?? ''}</span>`;
-  if (e.tipo === 'cotizacion') return html`${e.estado === 'error' ? '' : (e.mensaje ?? '')} ${id}`;
+  if (e.tipo === 'cotizacion') return html`${e.referencia ?? ''} ${id}`;
   if (e.tipo === 'empate') return html`histórico ${id}`;
   if (e.tipo === 'conflicto') return html`conflicto ${id}`;
   if (e.tipo === 'accion') return html`acción ${id}`;

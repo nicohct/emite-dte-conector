@@ -287,10 +287,10 @@ describe('panel: enlaces', () => {
     const base = await levantar();
     const { texto } = await pedir(`${base}/panel/eventos`);
     expect(hrefs(texto)).toContain(`${EMITE}/cotizaciones/em-1`);
-    expect(texto).toMatch(/target="_blank" rel="noopener noreferrer"/);
+    expect(texto).toMatch(/target="_blank" rel="noopener noreferrer"\s*>N° 1</);
   });
 
-  it('sin URL de Emite DTE no hay enlaces externos pero sí el id', async () => {
+  it('sin URL de Emite DTE no hay enlaces externos pero sí el número', async () => {
     poblarBasico();
     const base = await levantar({ emite: null });
     for (const ruta_ of ['/panel/flujos', '/panel/eventos']) {
@@ -299,7 +299,7 @@ describe('panel: enlaces', () => {
       expect(texto).not.toContain('target="_blank"');
     }
     const { texto } = await pedir(`${base}/panel/eventos`);
-    expect(texto).toContain('em-1');
+    expect(texto).toContain('N° 1');
     expect(texto).toContain('SKU-PRUEBA-1');
   });
 });
@@ -313,6 +313,8 @@ describe('panel: eventos', () => {
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(texto).toContain('COT-1');
     expect(texto).toContain('>q-2<');
+    // La cotización con error conserva su número de Coreinbox en la columna de origen.
+    expect(texto).toMatch(/COT-2\s*<span class="id tenue">q-2<\/span>/);
     expect(texto).toContain('creada');
     expect(texto).toContain('Empresa de Prueba SpA (76000000-0) sin dirección');
     expect(texto).toContain('wh-prueba-1');

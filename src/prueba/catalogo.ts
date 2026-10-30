@@ -200,6 +200,28 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
   const ruta = url.pathname;
   if (url.origin === CI) {
     const sobre = (data: unknown) => ({ success: true, data, meta: { timestamp: T2 } });
+    if (metodo === 'POST' && ruta === '/api/v1/products') {
+      // Como el API real (`forbidNonWhitelisted`): `isActive` no está en `CreateProductDto`.
+      if ('isActive' in cuerpo) {
+        return respuesta({ success: false, error: { code: 'VALIDATION_ERROR' } }, 400);
+      }
+      if (mundo.coreinbox.some((c) => c.sku === cuerpo.sku)) {
+        return respuesta({ success: false, error: { code: 'SKU_DUPLICATED' } }, 409);
+      }
+      const p = coreinbox(`ci-${String(cuerpo.sku)}`, {
+        sku: String(cuerpo.sku),
+        name: String(cuerpo.name),
+        type: String(cuerpo.type),
+        unitPrice: String(cuerpo.unitPrice),
+        isTaxable: cuerpo.isTaxable !== false,
+        taxRate: cuerpo.isTaxable === false ? '0' : '0.19',
+        categoryId: typeof cuerpo.categoryId === 'string' ? cuerpo.categoryId : null,
+        unit: null,
+        updatedAt: tic(mundo),
+      });
+      mundo.coreinbox.push(p);
+      return respuesta(sobre(p), 201);
+    }
     const id = ruta.match(/^\/api\/v1\/products\/([^/]+)$/)?.[1];
     if (metodo === 'PATCH' && id) {
       const p = mundo.coreinbox.find((c) => c.id === decodeURIComponent(id));
@@ -208,6 +230,7 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
       if (typeof cuerpo.unitPrice === 'number') p.unitPrice = String(cuerpo.unitPrice);
       if (typeof cuerpo.isActive === 'boolean') p.isActive = cuerpo.isActive;
       if (cuerpo.categoryId !== undefined) p.categoryId = cuerpo.categoryId as string | null;
+      if (cuerpo.type === 'product' || cuerpo.type === 'service') p.type = cuerpo.type;
       p.updatedAt = tic(mundo);
       return respuesta(sobre(p));
     }
@@ -296,6 +319,7 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
       if (typeof cuerpo.activo === 'boolean') p.activo = cuerpo.activo;
       if (cuerpo.tipo === 'bien' || cuerpo.tipo === 'servicio') p.tipo = cuerpo.tipo;
       if (typeof cuerpo.categoria === 'string') p.categoria = cuerpo.categoria;
+      if (typeof cuerpo.exento === 'boolean') p.exento = cuerpo.exento;
       p.updatedAt = tic(mundo);
       return respuesta(p);
     }

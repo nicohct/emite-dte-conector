@@ -26,8 +26,17 @@ import type {
 } from '../../estado-catalogo.js';
 import { CAMPOS_COMPARTIDOS } from '../../estado-catalogo.js';
 import type { Estado } from '../../estado.js';
+import { log } from '../../log.js';
 import { MARGEN_CURSOR_MS, conValor, num } from '../comun.js';
-import { TASA_IVA, brutoDesdeNeto, calcularProducto, comparable, modoDe } from './canonico.js';
+import type { EntradaCanonico } from './canonico.js';
+import {
+  TASA_IVA,
+  brutoDesdeNeto,
+  calcularProducto,
+  comparable,
+  modoDe,
+  pendientesCerradas,
+} from './canonico.js';
 import { indexarCanonicos, proponerEmpate } from './empates.js';
 import { unidadEmite } from './mapeo.js';
 
@@ -281,10 +290,15 @@ function aprobarPublicado(
   registro.decidirVisibilidad(sku, { estado: 'aprobado', usuario: USUARIO_WEB, en });
 }
 
-/** Recalcula el producto canónico de un SKU; si ya no queda ninguna lectura, lo quita. */
+/**
+ * Recalcula el producto canónico de un SKU; si ya no queda ninguna lectura ni un alta, lo quita.
+ * Lo pendiente del panel que ya está en los sistemas (o quedó atrás) se borra aquí: un alta cuando
+ * el SKU existe en todo su alcance, una edición cuando no queda nada que escribir de ese campo.
+ */
 export function recalcular(registro: RegistroCatalogo, sku: string): void {
   const lecturas = registro.lecturas(sku);
-  if (Object.keys(lecturas).length === 0) {
+  const alta = registro.alta(sku);
+  if (Object.keys(lecturas).length === 0 && !alta) {
     registro.quitarProducto(sku);
     return;
   }
@@ -311,19 +325,45 @@ export function recalcular(registro: RegistroCatalogo, sku: string): void {
     if (empate?.estado === 'confirmado') break;
   }
   const reglas = registro.reglas().filter((r) => r.ambito === '*' || r.ambito === sku);
-  registro.guardarProducto(
-    calcularProducto({
+  const entrada: EntradaCanonico = {
+    sku,
+    lecturas,
+    reglas,
+    visibilidad: registro.visibilidadDecidida(sku),
+    conflictosAbiertos: registro.conflictos(sku, true),
+    primeraEscritura: registro.primeraEscritura(),
+    categoriasFuera: new Set(registro.categoriasFuera().map((c) => c.categoria)),
+    noCrearEnEmite,
+    avisos,
+    alta,
+    ediciones: registro.pendientes(sku),
+  };
+  const producto = calcularProducto(entrada);
+  if (alta && producto.faltaEn.length === 0) {
+    registro.quitarAlta(sku);
+    log('info', 'el alta del panel ya está en su alcance', { sku });
+    recalcular(registro, sku);
+    return;
+  }
+  const cerradas = pendientesCerradas(entrada, producto);
+  if (cerradas.length > 0) {
+    for (const { edicion: ed, descartadaEn } of cerradas) {
+      registro.quitarPendiente(sku, ed.campo, ed.en);
+      // Una edición que perdió ante un cambio posterior en un sistema queda a la vista en Eventos.
+      if (descartadaEn) {
+        const detalle = { sku, campo: ed.campo, valor: ed.valor, editadaEn: ed.en };
+        registro.registrarAccion('descartada', ed.usuario, detalle, descartadaEn);
+      }
+    }
+    log('info', 'ediciones del panel cerradas', {
       sku,
-      lecturas,
-      reglas,
-      visibilidad: registro.visibilidadDecidida(sku),
-      conflictosAbiertos: registro.conflictos(sku, true),
-      primeraEscritura: registro.primeraEscritura(),
-      categoriasFuera: new Set(registro.categoriasFuera().map((c) => c.categoria)),
-      noCrearEnEmite,
-      avisos,
-    }),
-  );
+      campos: cerradas.map((c) => c.edicion.campo),
+      descartadas: cerradas.filter((c) => c.descartadaEn).map((c) => c.edicion.campo),
+    });
+    recalcular(registro, sku);
+    return;
+  }
+  registro.guardarProducto(producto);
 }
 
 export function recalcularTodo(registro: RegistroCatalogo): void {

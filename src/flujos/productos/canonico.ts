@@ -17,12 +17,20 @@
  *   lectura vio publicado en la web queda aprobado con usuario `web`); sin decisión, un producto de
  *   una categoría fuera de la web queda `rechazado` (motivo `categoria`) y el resto, incluido un
  *   borrador en la tienda, `propuesto`. Sólo lo aprobado se publica.
+ * - **Lo pendiente del panel:** un alta pone todos los campos (fuente `panel`) y se crea en
+ *   Coreinbox, Emite DTE y, si quedó aprobada, la web; mientras exista, manda sobre lo leído. Una
+ *   edición es el último cambio del campo a la hora en que se hizo: en «último cambio» se escribe
+ *   en todos; con propietario, sólo en el propietario, y de ahí se propaga como siempre. Un cambio
+ *   visto después en un sistema que cuenta la deja atrás. `pendientesCerradas` dice cuáles ya
+ *   están en los sistemas.
  */
 import type {
+  AltaPendiente,
   CampoCatalogo,
   CampoCompartido,
   Conflicto,
   DecisionVisibilidad,
+  EdicionPendiente,
   EscrituraPlaneada,
   LecturaGuardada,
   ModoCampo,
@@ -64,13 +72,14 @@ export const MODO_POR_OMISION: Record<CampoCatalogo, ModoCampo> = {
 export const CAMPOS_ULTIMO_CAMBIO: readonly CampoCatalogo[] = CAMPOS_COMPARTIDOS;
 
 /**
- * Lo que la escritura cambia en cada sistema. La exención no se escribe en ninguno (manda Emite
- * DTE y sólo sirve para el neto); en la web no hay tipo ni una categoría comparable.
+ * Lo que la escritura cambia en cada sistema. La exención sólo se escribe en Emite DTE, que manda
+ * en ella (junto con el neto que conserva el bruto); en la web no hay tipo ni una categoría
+ * comparable.
  */
 export const CAMPOS_ESCRIBIBLES: Record<SistemaCatalogo, readonly CampoCatalogo[]> = {
-  coreinbox: ['nombre', 'precio', 'activo', 'categoria'],
+  coreinbox: ['nombre', 'precio', 'activo', 'tipo', 'categoria'],
   woocommerce: ['nombre', 'precio', 'activo'],
-  emite: ['nombre', 'precio', 'activo', 'tipo', 'categoria'],
+  emite: ['nombre', 'precio', 'activo', 'tipo', 'categoria', 'exento'],
 };
 
 const CAMPOS_CANONICOS: CampoCatalogo[] = [
@@ -127,6 +136,34 @@ export function modoDe(reglas: Regla[], sku: string, campo: CampoCatalogo): Modo
     : { modo: 'propietario', orden: arranque };
 }
 
+/** Quién manda de hecho en un campo con propietario: el primero del orden donde está el SKU. */
+export function duenoDe(
+  modo: ModoDeCampo,
+  presentes: readonly SistemaCatalogo[],
+): SistemaCatalogo | null {
+  return modo.modo === 'propietario'
+    ? (modo.orden.find((s) => presentes.includes(s)) ?? null)
+    : null;
+}
+
+/**
+ * Dónde escribe la pasada una edición del panel: en «último cambio», en todos los sistemas donde
+ * está el SKU y se escribe el campo; con propietario, sólo en el propietario (de ahí se propaga a
+ * los demás como cualquier cambio suyo). Vacío si el propietario no deja escribir el campo.
+ */
+export function destinosEdicion(
+  reglas: Regla[],
+  sku: string,
+  campo: CampoCatalogo,
+  presentes: readonly SistemaCatalogo[],
+): SistemaCatalogo[] {
+  const modo = modoDe(reglas, sku, campo);
+  const candidatos = modo.modo === 'ultimo' ? presentes : [duenoDe(modo, presentes)];
+  return candidatos.filter(
+    (s): s is SistemaCatalogo => s !== null && CAMPOS_ESCRIBIBLES[s].includes(campo),
+  );
+}
+
 export interface EntradaCanonico {
   sku: string;
   lecturas: Partial<Record<SistemaCatalogo, LecturaGuardada>>;
@@ -145,10 +182,77 @@ export interface EntradaCanonico {
   noCrearEnEmite?: string | null;
   /** Avisos que vienen de fuera del cálculo (una fusión que requiere mano, por ejemplo). */
   avisos?: string[];
+  /** El alta del panel, mientras no esté en todo su alcance. */
+  alta?: AltaPendiente | null;
+  /** Ediciones del panel que la pasada todavía no deja en los sistemas. */
+  ediciones?: EdicionPendiente[];
 }
 
 const valorDe = (l: LecturaGuardada | undefined, campo: CampoCatalogo): ValorCampo =>
   l?.campos[campo]?.valor ?? null;
+
+const presentesEn = (e: EntradaCanonico): SistemaCatalogo[] =>
+  SISTEMAS_CATALOGO.filter((s) => e.lecturas[s] !== undefined);
+
+/**
+ * Una edición queda atrás si después de hacerla un sistema que cuenta (en «último cambio»,
+ * cualquiera; con propietario, el propietario) cambió el campo a otro valor.
+ */
+function edicionSuperada(e: EntradaCanonico, ed: EdicionPendiente): string | null {
+  const modo = modoDe(e.reglas, e.sku, ed.campo);
+  const presentes = presentesEn(e);
+  const cuentan = modo.modo === 'ultimo' ? presentes : [duenoDe(modo, presentes)];
+  for (const s of cuentan) {
+    const c = s ? e.lecturas[s]?.campos[ed.campo] : undefined;
+    if (
+      c?.cambioEn != null &&
+      Date.parse(c.cambioEn) > Date.parse(ed.en) &&
+      !igualesEn(ed.campo, c.valor, ed.valor)
+    ) {
+      return c.cambioEn;
+    }
+  }
+  return null;
+}
+
+function valorDeAlta(a: AltaPendiente, campo: CampoCatalogo): ValorCampo {
+  return {
+    nombre: a.nombre,
+    precio: a.precio,
+    activo: a.activo,
+    tipo: a.tipo,
+    categoria: a.categoria,
+    exento: a.exento,
+  }[campo];
+}
+
+/**
+ * Las ediciones que ya no hace falta guardar: las que quedaron atrás (`descartadaEn`, la hora en
+ * que se vio el cambio que les ganó) y las que ya están en todos sus destinos (la pasada no tiene
+ * nada que escribir de ese campo ahí). Con un alta no se cierra ninguna: el alta manda hasta que el
+ * producto existe en todo su alcance.
+ */
+export function pendientesCerradas(
+  e: EntradaCanonico,
+  p: ProductoCatalogo,
+): Array<{ edicion: EdicionPendiente; descartadaEn: string | null }> {
+  if (e.alta) return [];
+  const r: Array<{ edicion: EdicionPendiente; descartadaEn: string | null }> = [];
+  for (const ed of e.ediciones ?? []) {
+    const superada = edicionSuperada(e, ed);
+    if (superada) {
+      r.push({ edicion: ed, descartadaEn: superada });
+      continue;
+    }
+    if (p.canonico[ed.campo]?.conflicto) continue;
+    const destinos = destinosEdicion(e.reglas, e.sku, ed.campo, p.presentes);
+    const falta = (p.escrituras ?? []).some(
+      (w) => w.campo === ed.campo && destinos.includes(w.sistema),
+    );
+    if (!falta) r.push({ edicion: ed, descartadaEn: null });
+  }
+  return r;
+}
 
 /** Publicado en la web: `publish` y no oculto del catálogo. */
 export function publicadoEnWeb(l: LecturaGuardada | undefined): boolean {
@@ -157,9 +261,15 @@ export function publicadoEnWeb(l: LecturaGuardada | undefined): boolean {
 
 export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   const avisos: string[] = [...(e.avisos ?? [])];
-  const presentes = SISTEMAS_CATALOGO.filter((s) => e.lecturas[s] !== undefined);
+  const presentes = presentesEn(e);
   const conflictos = new Set(e.conflictosAbiertos.map((c) => c.campo));
   const primera = e.primeraEscritura ?? null;
+  const ediciones = new Map<CampoCatalogo, EdicionPendiente>();
+  if (!e.alta) {
+    for (const ed of e.ediciones ?? []) if (!edicionSuperada(e, ed)) ediciones.set(ed.campo, ed);
+  }
+  /** Con propietario, una edición se escribe sólo en él. */
+  const soloEn = new Map<CampoCatalogo, SistemaCatalogo | null>();
 
   const canonico: Partial<Record<CampoCatalogo, ValorCanonico>> = {};
   for (const campo of CAMPOS_CANONICOS) {
@@ -186,6 +296,13 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
             .sort((a, b) => Date.parse(b.c?.cambioEn ?? '') - Date.parse(a.c?.cambioEn ?? ''))
         : [];
       elegido = primeroCon(cambios[0] ? [cambios[0].s] : arranque);
+    }
+    const edicion = ediciones.get(campo);
+    if (e.alta) {
+      elegido = { valor: valorDeAlta(e.alta, campo), fuente: 'panel', modo: modo.modo };
+    } else if (edicion) {
+      elegido = { valor: edicion.valor, fuente: 'panel', modo: modo.modo };
+      if (modo.modo === 'propietario') soloEn.set(campo, duenoDe(modo, presentes));
     }
     if (conflictos.has(campo)) elegido.conflicto = true;
     canonico[campo] = elegido;
@@ -240,11 +357,13 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   const precioNeto =
     typeof precio === 'number' ? netoDesdeBruto(precio, exento ? 0 : TASA_IVA) : null;
 
-  const escrituras = planificar(e, canonico, visibilidadWeb, primera);
+  const escrituras = planificar(e, canonico, visibilidadWeb, primera, soloEn);
   const crearEn: SistemaCatalogo[] = [];
   const nombre = canonico.nombre?.valor;
+  // En Coreinbox sólo se crea lo que nació en el panel.
+  if (faltaEn.includes('coreinbox') && e.alta) crearEn.push('coreinbox');
   // Sólo se crea lo que viene de una fuente: un producto que existe sólo en Emite DTE se queda ahí.
-  if (faltaEn.includes('emite') && (e.lecturas.coreinbox || e.lecturas.woocommerce)) {
+  if (faltaEn.includes('emite') && (e.alta || e.lecturas.coreinbox || e.lecturas.woocommerce)) {
     if (e.noCrearEnEmite) avisos.push(e.noCrearEnEmite);
     else if (typeof nombre === 'string' && typeof precio === 'number') crearEn.push('emite');
     else avisos.push('Falta en Emite DTE pero no tiene nombre y precio para crearlo');
@@ -265,19 +384,22 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
     avisos,
     escrituras,
     crearEn,
+    ...(e.alta || ediciones.size > 0 ? { pendiente: true as const } : {}),
   };
 }
 
 /**
  * Qué campo se escribe en qué sistema: lo que difiere del canónico al compararlo (en bruto el
  * precio), salvo los campos en conflicto o sin valor canónico. En la web `activo` es el estado:
- * publicado sólo si está aprobado y activo; rechazado o `no_aplica` pasa a borrador.
+ * publicado sólo si está aprobado y activo; rechazado o `no_aplica` pasa a borrador. Lo que viene
+ * del panel nunca es una reversión, y una edición con propietario va sólo a él (`soloEn`).
  */
 function planificar(
   e: EntradaCanonico,
   canonico: Partial<Record<CampoCatalogo, ValorCanonico>>,
   visibilidad: VisibilidadWeb,
   primera: string | null,
+  soloEn: ReadonlyMap<CampoCatalogo, SistemaCatalogo | null>,
 ): EscrituraPlaneada[] {
   const plan: EscrituraPlaneada[] = [];
   for (const sistema of SISTEMAS_CATALOGO) {
@@ -286,6 +408,7 @@ function planificar(
     for (const campo of CAMPOS_ESCRIBIBLES[sistema]) {
       const c = canonico[campo];
       if (!c || c.conflicto) continue;
+      if (soloEn.has(campo) && soloEn.get(campo) !== sistema) continue;
       let valor = c.valor;
       if (sistema === 'woocommerce' && campo === 'activo') {
         if (visibilidad !== 'aprobado') valor = false;
@@ -303,7 +426,11 @@ function planificar(
         campo,
         antes: leido?.valor ?? null,
         valor: comparable(campo, valor),
-        revierte: primera !== null && Boolean(leido?.cambioEn) && c.fuente !== sistema,
+        revierte:
+          primera !== null &&
+          Boolean(leido?.cambioEn) &&
+          c.fuente !== sistema &&
+          c.fuente !== 'panel',
       });
     }
   }

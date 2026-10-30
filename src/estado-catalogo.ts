@@ -14,6 +14,11 @@
  * La escritura (fase 1b) agrega lo operativo: qué escribió el conector en cada campo (`escrito_*`,
  * para reconocer el eco), cuándo vio un cambio que no era eco (`cambio_en`, para «último cambio»),
  * la hora de la primera escritura y la bitácora de escrituras (`catalogo_eventos`).
+ *
+ * El alta y la edición desde el panel (fase 1c) agregan lo **pendiente**: un producto que nació en
+ * el panel (`catalogo_altas`) o un campo editado ahí (`catalogo_pendientes`) mientras la pasada no
+ * lo deja en los sistemas. No es un cuarto maestro: en cuanto los sistemas lo tienen, la fila se
+ * borra y el producto vuelve a ser derivado de ellos. Se respalda con las decisiones.
  */
 type DatabaseSync = import('node:sqlite').DatabaseSync;
 
@@ -93,9 +98,12 @@ export interface EntradaIndice {
 
 export type ModoCampo = 'propietario' | 'ultimo';
 
+/** De dónde sale un valor canónico: un sistema o el panel (un alta o una edición pendiente). */
+export type FuenteCanonico = SistemaCatalogo | 'panel';
+
 export interface ValorCanonico {
   valor: ValorCampo;
-  fuente: SistemaCatalogo | null;
+  fuente: FuenteCanonico | null;
   modo?: ModoCampo;
   /** Hay un conflicto abierto en el campo: la 1b no lo escribe hasta que se resuelva. */
   conflicto?: true;
@@ -123,6 +131,31 @@ export interface ProductoCatalogo {
   escrituras?: EscrituraPlaneada[];
   /** Los sistemas del alcance donde la escritura lo crearía. */
   crearEn?: SistemaCatalogo[];
+  /** Tiene un alta o una edición del panel que la pasada todavía no deja en los sistemas. */
+  pendiente?: true;
+}
+
+/** Un producto que nació en el panel y la pasada todavía no crea en todo su alcance. */
+export interface AltaPendiente {
+  sku: string;
+  nombre: string;
+  /** Bruto entero en pesos. */
+  precio: number;
+  tipo: TipoProductoCatalogo;
+  categoria: string | null;
+  exento: boolean;
+  activo: boolean;
+  usuario: string | null;
+  en: string;
+}
+
+/** Un campo editado en el panel que la pasada todavía no deja en los sistemas. */
+export interface EdicionPendiente {
+  sku: string;
+  campo: CampoCatalogo;
+  valor: ValorCampo;
+  usuario: string | null;
+  en: string;
 }
 
 /**
@@ -169,6 +202,7 @@ export interface Conflicto {
   valores: Partial<Record<SistemaCatalogo, { valor: ValorCampo; en: string | null }>>;
   abiertoEn: string;
   estado: 'abierto' | 'resuelto';
+  /** El sistema elegido; null si se resolvió con una edición del panel. */
   resueltoCon: SistemaCatalogo | null;
   resueltoPor: string | null;
   resueltoEn: string | null;
@@ -250,6 +284,9 @@ export interface Decisiones {
   conflictos: Array<Omit<Conflicto, 'id' | 'estado'>>;
   visibilidad: Array<DecisionVisibilidad & { sku: string }>;
   categoriasFuera: CategoriaFuera[];
+  /** Lo pendiente del panel (fase 1c); un respaldo anterior no lo trae. */
+  altas?: AltaPendiente[];
+  pendientes?: EdicionPendiente[];
 }
 
 export interface DecisionVisibilidad {
@@ -269,6 +306,8 @@ export interface FiltroCatalogo {
   historicos?: boolean;
   /** Rechazado en la web sólo por su categoría (sin decisión por SKU). */
   rechazadoPorCategoria?: boolean;
+  /** Tiene un alta o una edición del panel pendiente de escribir. */
+  pendientes?: boolean;
 }
 
 export interface ResumenCatalogo {
@@ -363,6 +402,15 @@ export class RegistroCatalogo {
       );
       CREATE INDEX IF NOT EXISTS catalogo_eventos_clave ON catalogo_eventos (clave, id);
       CREATE INDEX IF NOT EXISTS catalogo_eventos_sku ON catalogo_eventos (sku, id);
+      CREATE TABLE IF NOT EXISTS catalogo_altas (
+        sku TEXT PRIMARY KEY, nombre TEXT NOT NULL, precio INTEGER NOT NULL, tipo TEXT NOT NULL,
+        categoria TEXT, exento INTEGER NOT NULL, activo INTEGER NOT NULL,
+        usuario TEXT, en TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS catalogo_pendientes (
+        sku TEXT NOT NULL, campo TEXT NOT NULL, valor TEXT NOT NULL, usuario TEXT, en TEXT NOT NULL,
+        PRIMARY KEY (sku, campo)
+      );
     `);
     // Columnas que llegaron con la fase 1b sobre tablas de la 1a.
     agregarColumna(db, 'catalogo_campos', 'cambio_en', 'TEXT');
@@ -593,10 +641,13 @@ export class RegistroCatalogo {
       .run(sistema, en, sku, campo);
   }
 
-  /** Todos los SKU con alguna lectura o con producto calculado. */
+  /** Todos los SKU con alguna lectura, con producto calculado o con un alta pendiente. */
   skus(): string[] {
     const filas = this.db
-      .prepare('SELECT sku FROM catalogo_ids UNION SELECT sku FROM catalogo_productos ORDER BY sku')
+      .prepare(
+        `SELECT sku FROM catalogo_ids UNION SELECT sku FROM catalogo_productos
+         UNION SELECT sku FROM catalogo_altas ORDER BY sku`,
+      )
       .all() as Array<{ sku: string }>;
     return filas.map((f) => f.sku);
   }
@@ -674,6 +725,12 @@ export class RegistroCatalogo {
     if (filtro.historicos) {
       donde.push(
         `EXISTS (SELECT 1 FROM catalogo_empates e WHERE e.sku = p.sku AND e.estado = 'propuesto')`,
+      );
+    }
+    if (filtro.pendientes) {
+      donde.push(
+        `(EXISTS (SELECT 1 FROM catalogo_altas a WHERE a.sku = p.sku)
+          OR EXISTS (SELECT 1 FROM catalogo_pendientes e WHERE e.sku = p.sku))`,
       );
     }
     const where = donde.length > 0 ? `WHERE ${donde.join(' AND ')}` : '';
@@ -973,7 +1030,13 @@ export class RegistroCatalogo {
     return filas.map(conflictoDesdeFila);
   }
 
-  resolverConflicto(id: number, fuente: SistemaCatalogo, usuario: string | null, en: string): void {
+  /** Resuelve un conflicto con el valor de `fuente`, o (null) con una edición del panel. */
+  resolverConflicto(
+    id: number,
+    fuente: SistemaCatalogo | null,
+    usuario: string | null,
+    en: string,
+  ): void {
     this.db
       .prepare(
         `UPDATE catalogo_conflictos SET estado = 'resuelto', resuelto_con = ?, resuelto_por = ?,
@@ -1095,6 +1158,80 @@ export class RegistroCatalogo {
       .filter((v): v is string => typeof v === 'string');
   }
 
+  // --- Lo pendiente del panel: altas y ediciones ---
+
+  guardarAlta(a: AltaPendiente): void {
+    this.db
+      .prepare(
+        `INSERT INTO catalogo_altas
+           (sku, nombre, precio, tipo, categoria, exento, activo, usuario, en)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sku) DO UPDATE SET nombre = excluded.nombre, precio = excluded.precio,
+           tipo = excluded.tipo, categoria = excluded.categoria, exento = excluded.exento,
+           activo = excluded.activo, usuario = excluded.usuario, en = excluded.en`,
+      )
+      .run(
+        a.sku,
+        a.nombre,
+        a.precio,
+        a.tipo,
+        a.categoria,
+        a.exento ? 1 : 0,
+        a.activo ? 1 : 0,
+        a.usuario,
+        a.en,
+      );
+  }
+
+  alta(sku: string): AltaPendiente | null {
+    const f = this.db.prepare('SELECT * FROM catalogo_altas WHERE sku = ?').get(sku) as
+      Fila | undefined;
+    return f ? altaDesdeFila(f) : null;
+  }
+
+  altas(): AltaPendiente[] {
+    const filas = this.db.prepare('SELECT * FROM catalogo_altas ORDER BY sku').all() as Fila[];
+    return filas.map(altaDesdeFila);
+  }
+
+  quitarAlta(sku: string): void {
+    this.db.prepare('DELETE FROM catalogo_altas WHERE sku = ?').run(sku);
+  }
+
+  /** Una edición del panel; reemplaza la anterior del mismo campo. */
+  guardarPendiente(p: EdicionPendiente): void {
+    this.db
+      .prepare(
+        `INSERT INTO catalogo_pendientes (sku, campo, valor, usuario, en) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(sku, campo) DO UPDATE SET valor = excluded.valor, usuario = excluded.usuario,
+           en = excluded.en`,
+      )
+      .run(p.sku, p.campo, json(p.valor), p.usuario, p.en);
+  }
+
+  /** Las ediciones pendientes de un SKU, o de todo el catálogo. */
+  pendientes(sku?: string): EdicionPendiente[] {
+    const filas = (
+      sku === undefined
+        ? this.db.prepare('SELECT * FROM catalogo_pendientes ORDER BY sku, campo').all()
+        : this.db.prepare('SELECT * FROM catalogo_pendientes WHERE sku = ? ORDER BY campo').all(sku)
+    ) as Fila[];
+    return filas.map((f) => ({
+      sku: f.sku as string,
+      campo: f.campo as CampoCatalogo,
+      valor: deJson<ValorCampo>(f.valor, null),
+      usuario: texto(f.usuario),
+      en: f.en as string,
+    }));
+  }
+
+  /** Borra una edición ya escrita o superada; si entretanto llegó otra más nueva, ésa se queda. */
+  quitarPendiente(sku: string, campo: CampoCatalogo, en: string): void {
+    this.db
+      .prepare('DELETE FROM catalogo_pendientes WHERE sku = ? AND campo = ? AND en = ?')
+      .run(sku, campo, en);
+  }
+
   // --- Exportar e importar las decisiones ---
 
   /** Todas las decisiones humanas, para respaldarlas (la excepción a la reconstruibilidad). */
@@ -1114,12 +1251,15 @@ export class RegistroCatalogo {
       conflictos: this.conflictosResueltos().map(({ id: _id, estado: _estado, ...c }) => c),
       visibilidad: this.visibilidades(),
       categoriasFuera: this.categoriasFuera(),
+      altas: this.altas(),
+      pendientes: this.pendientes(),
     };
   }
 
   /**
    * Repone decisiones exportadas. Idempotente: lo que ya está igual no cambia y lo que no viene no
-   * se borra. Devuelve cuántas filas trajo de cada clase.
+   * se borra. Una edición pendiente sólo reemplaza a la del mismo campo si es más nueva. Devuelve
+   * cuántas filas trajo de cada clase.
    */
   importarDecisiones(d: Decisiones): Record<Exclude<keyof Decisiones, 'version'>, number> {
     return this.transaccion(() => {
@@ -1154,12 +1294,20 @@ export class RegistroCatalogo {
         this.decidirVisibilidad(v.sku, { estado: v.estado, usuario: v.usuario, en: v.en });
       }
       for (const c of d.categoriasFuera) this.marcarCategoria(c.categoria, true, c.usuario, c.en);
+      for (const a of d.altas ?? []) this.guardarAlta(a);
+      for (const p of d.pendientes ?? []) {
+        const actual = this.pendientes(p.sku).find((x) => x.campo === p.campo);
+        if (actual && Date.parse(actual.en) >= Date.parse(p.en)) continue;
+        this.guardarPendiente(p);
+      }
       return {
         reglas: d.reglas.length,
         empates: d.empates.length,
         conflictos: d.conflictos.length,
         visibilidad: d.visibilidad.length,
         categoriasFuera: d.categoriasFuera.length,
+        altas: d.altas?.length ?? 0,
+        pendientes: d.pendientes?.length ?? 0,
       };
     });
   }
@@ -1262,6 +1410,20 @@ function historicoDesdeFila(f: Fila): HistoricoEmite {
     aliasSku: texto(f.alias_sku),
     modificadoEn: texto(f.modificado_en),
     leidoEn: f.leido_en as string,
+  };
+}
+
+function altaDesdeFila(f: Fila): AltaPendiente {
+  return {
+    sku: f.sku as string,
+    nombre: f.nombre as string,
+    precio: f.precio as number,
+    tipo: f.tipo as TipoProductoCatalogo,
+    categoria: texto(f.categoria),
+    exento: f.exento === 1,
+    activo: f.activo === 1,
+    usuario: texto(f.usuario),
+    en: f.en as string,
   };
 }
 

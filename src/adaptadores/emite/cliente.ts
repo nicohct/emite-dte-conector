@@ -129,7 +129,10 @@ export interface ProductoNuevo {
  * código ni el origen.
  */
 export type CambiosProducto = Partial<
-  Pick<ProductoNuevo, 'nombre' | 'precioNeto' | 'tipo' | 'categoria'> & { activo: boolean }
+  Pick<ProductoNuevo, 'nombre' | 'precioNeto' | 'tipo' | 'categoria'> & {
+    activo: boolean;
+    exento: boolean;
+  }
 >;
 
 export class ErrorEmite extends Error {

@@ -191,13 +191,15 @@ Están pensadas para la red interna y el panel.
 
 - `GET /catalogo?pagina=1&limite=50` (máximo 200), con los filtros `q`, `diferencias=true`,
   `conflicto=true`, `sin_sku=true` (le falta algún sistema de su alcance), `propuesto_web=true` y
-  `historicos=true` (tiene empates propuestos). Con `vista=historicos` (y `estado=propuesto|confirmado|rechazado|sin_candidato`)
+  `historicos=true` (tiene empates propuestos) y `pendientes=true` (tiene un alta o una edición del
+  panel sin escribir). Con `vista=historicos` (y `estado=propuesto|confirmado|rechazado|sin_candidato`)
   lista los históricos con sus empates; con `vista=sin_sku` (y `sistema=`) lista los productos sin SKU.
   Responde `{ vista, pagina, limite, total, items }`.
 - `GET /catalogo/{sku}`: canónico (valor, fuente y modo), `precioNeto`, tipo, alcance, visibilidad y
   `motivoVisibilidad`, diferencias, `faltaEn`, `escrituras` y `crearEn` (lo que la próxima escritura
   haría), `sistemas` (id, valores, hora de cambio y de lectura de cada uno), reglas, conflictos,
-  empates con su histórico, `indice` y `eventos` (las últimas escrituras del SKU).
+  empates con su histórico, `indice`, `pendientes` (`{ alta, ediciones }`: lo del panel que la
+  pasada todavía no deja en los sistemas) y `eventos` (las últimas escrituras del SKU).
 - `POST /catalogo/acciones/reglas` con `{ campo, fuente, skus? }`. La fuente es `coreinbox`,
   `woocommerce` o `emite` (propietario), `ultimo` (último cambio; sólo `nombre`, `precio` y
   `activo`), o `null` para volver al modo por omisión. Sin `skus`, aplica a todo el catálogo.
@@ -209,10 +211,16 @@ Están pensadas para la red interna y el panel.
   servicio no se aprueba.
 - `POST /catalogo/acciones/categorias` con `{ categorias: ["…"], fuera: true|false }`: saca de la web
   (o devuelve) categorías de Coreinbox, por nombre.
+- `POST /catalogo/acciones/alta` con `{ sku, nombre, precio, tipo, categoria?, exento?, activo?, visibilidad? }`:
+  un producto nuevo (precio bruto entero, `tipo` `bien` o `servicio`, `visibilidad: "aprobado"`
+  para que vaya a la web). Ver [Alta y edición](#alta-y-edición-desde-el-panel).
+- `POST /catalogo/acciones/edicion` con `{ sku, campos: { nombre?, precio?, activo?, tipo?, categoria?, exento? } }`.
+  El SKU no se edita.
 - `GET /catalogo/decisiones` y `POST /catalogo/decisiones`: exportar e importar las decisiones (ver
   [Respaldo de las decisiones](#respaldo-de-las-decisiones)).
 
-Las acciones responden `{ aplicadas, errores: [{ indice, error }] }`, procesan en lote (hasta 500) y
+Las acciones responden `{ aplicadas, errores: [{ indice, error }] }` (un alta o una edición inválida
+responde 400 con `{ error }`), las de decisiones procesan en lote (hasta 500) y
 registran la cabecera `X-Emite-Usuario`. Sólo cambian el registro: lo que implican en los sistemas lo
 lleva la pasada de escritura siguiente. El panel usa las mismas acciones desde sus formularios (ver
 «Panel»).
@@ -224,9 +232,10 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 
 - **Qué se escribe.** Por SKU y campo, el canónico (según el modo de [Quién manda](#modelo)) en cada
   sistema donde difiere, comparado en bruto el precio y sin espacios de más el nombre. Coreinbox
-  recibe nombre, precio neto (con su propia tasa), activo y categoría; la web, nombre, precio bruto y
-  estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo, tipo y
-  categoría. La exención no se escribe en ninguno. Un campo en conflicto no se escribe en ningún lado.
+  recibe nombre, precio neto (con su propia tasa), activo, tipo y categoría; la web, nombre, precio
+  bruto y estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo,
+  tipo, categoría y exención (manda en ella; al cambiarla recibe también el neto que conserva el
+  bruto). Un campo en conflicto no se escribe en ningún lado.
 - **Propietario.** Lo que cambie en otro sistema se revierte en la pasada siguiente y queda como evento
   `revertido`. Por ejemplo, despublicar en la web un producto activo en Coreinbox lo vuelve a publicar.
 - **Último cambio.** El último cambio que no sea eco se vuelve canónico y se escribe en los otros dos
@@ -237,7 +246,14 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 - **Crear.** Lo que falte en Emite DTE y tenga fuente (Coreinbox o la web) se crea con el SKU como
   código. No se crea si un histórico de Emite DTE ya usa ese código sin empate confirmado (queda un
   aviso). En la web se crea sólo lo aprobado que falte: publicado si está activo, si no en borrador.
-  **En Coreinbox no se crea nada** (lo decide la fase 1c).
+  **En Coreinbox sólo se crea lo que nació en el panel** (un alta): con su tipo, neto, exención y la
+  categoría resuelta a su id (si Coreinbox no tiene una categoría con ese nombre, se crea sin
+  categoría y el evento `creado` lo avisa). Lo que existe sólo en la web sigue sin crearse en
+  Coreinbox. Lo creado queda como lectura de ese sistema, con el eco marcado.
+- **Lo pendiente del panel.** Un alta manda en todos sus campos hasta que el SKU existe en todo su
+  alcance; ahí se borra y el producto se calcula como cualquier otro. Una edición en «último cambio»
+  se escribe en todos los sistemas; con propietario, sólo en el propietario, y la pasada siguiente
+  la propaga desde ahí. Nunca cuenta como reversión.
 - **Visibilidad.** Sólo lo `aprobado` se publica. Lo `rechazado` o `no_aplica` que ya está en la web
   pasa a borrador. Nunca se borra nada de la web.
 - **Históricos.** Un empate confirmado cuyo histórico tiene **exactamente** el SKU como código se
@@ -286,9 +302,11 @@ resultado de cada pasada (`escritos`, `revertidos`, `creados`, `adoptados`, `fus
 
 Las decisiones del panel son lo único del conector que no se reconstruye leyendo los tres sistemas.
 `GET /catalogo/decisiones` (con el mismo `Authorization: Bearer <CATALOGO_API_KEY>`) devuelve todas en
-un JSON (`version`, `reglas`, `empates`, `conflictos` resueltos, `visibilidad`, `categoriasFuera`), y
-`POST /catalogo/decisiones` con ese mismo JSON las repone. Reponer es idempotente: lo que ya está igual
-no cambia y lo que no viene no se borra. Conviene guardarlo junto a `conector.env`:
+un JSON (`version`, `reglas`, `empates`, `conflictos` resueltos, `visibilidad`, `categoriasFuera`, y
+lo pendiente del panel: `altas` y `pendientes`), y `POST /catalogo/decisiones` con ese mismo JSON las
+repone. Reponer es idempotente: lo que ya está igual no cambia, lo que no viene no se borra y una
+edición pendiente sólo reemplaza a otra del mismo campo si es más nueva. Un respaldo anterior, sin
+`altas` ni `pendientes`, se repone igual. Conviene guardarlo junto a `conector.env`:
 
 ```bash
 curl -fsS -H "Authorization: Bearer $CATALOGO_API_KEY" http://conector:8080/catalogo/decisiones > decisiones-catalogo.json
@@ -447,7 +465,8 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
   `EMITE_URL_PUBLICA`.
 - **Productos** (`/panel/productos`): tabla por SKU con la foto, el valor canónico y el de cada
   sistema en nombre, precio bruto y activo (los que difieren, marcados), tipo, alcance, visibilidad
-  web y avisos. Filtros `q`, `diferencias=1`, `conflicto=1`, `sin_sku=1`, `propuesto_web=1` e
+  web y avisos (con la marca «pendiente» si tiene algo del panel sin escribir). Filtros `q`,
+  `diferencias=1`, `conflicto=1`, `sin_sku=1`, `propuesto_web=1`, `pendientes=1` e
   `historicos=1`, y paginación. Desde la misma pantalla, las vistas **Históricos** y **Sin SKU**
   (`?vista=sin_sku&sistema=…`).
 - **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno,
@@ -466,7 +485,7 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
 
 ### Acciones
 
-Las decisiones son formularios HTML que mandan `POST /panel/acciones/{reglas|empates|conflictos|visibilidad|categorias}`
+Las decisiones son formularios HTML que mandan `POST /panel/acciones/{reglas|empates|conflictos|visibilidad|categorias|alta|edicion}`
 y usan la misma lógica que la API JSON (`src/flujos/productos/acciones.ts`). No piden
 `CATALOGO_API_KEY`: el panel está detrás de Emite DTE, y la cabecera `X-Emite-Usuario` queda como
 usuario de la decisión. Tras aplicar, redirigen (303) a la pantalla de origen con el resultado
@@ -474,6 +493,38 @@ usuario de la decisión. Tras aplicar, redirigen (303) a la pantalla de origen c
 
 Las decisiones cambian el registro del conector; con `PRODUCTOS_ESCRIBIR=true`, la pasada siguiente
 las lleva a Coreinbox, la web y Emite DTE.
+
+### Alta y edición desde el panel
+
+- **Alta** (`/panel/productos/nuevo`, o «Nuevo producto» en la lista): SKU (1 a 35 caracteres, sin
+  espacios en los extremos), nombre (hasta 80), precio bruto entero, tipo, categoría (de las de
+  Coreinbox que el registro ya leyó; si todavía no leyó ninguna, se escribe a mano), exento, activo
+  y «Aprobar para la web». Se rechaza el SKU `nuevo` (reservado por la pantalla
+  `productos/nuevo`), un SKU que ya existe, que ya tiene un alta pendiente o que es
+  el código exacto de un histórico de Emite DTE (ahí se confirma el empate desde **Históricos**), y
+  un nombre que ya existe sin SKU en algún sistema (hay que ponerle el SKU allá). Un servicio no se
+  aprueba para la web. Aprobarlo deja la decisión por SKU, aunque su categoría esté fuera de la web.
+  Se crea en Coreinbox y Emite DTE siempre, y en la web sólo si quedó aprobado. Coreinbox no acepta
+  `isActive` al crear: un alta inactiva se crea y se desactiva enseguida con un `PATCH`.
+- **Edición** (en el detalle del SKU): nombre, precio, activo, tipo, categoría y exento, partiendo del
+  valor canónico. En «último cambio» (nombre y precio) se escribe en los tres; en un campo con
+  propietario (activo, tipo y categoría van a Coreinbox; exento, a Emite DTE) se escribe en el
+  propietario y la pasada siguiente lo propaga. Si quien manda es un sistema donde el conector no
+  escribe ese campo (por ejemplo, el tipo de un producto que sólo está en la web), se rechaza y hay
+  que cambiarlo allá. Una edición
+  sobre un campo en conflicto lo resuelve con ese valor. **El SKU no se edita**: un cambio de código
+  se hace a mano en los tres sistemas.
+- **Pendiente.** Lo que nace o se edita en el panel queda **pendiente** en el hub (sección «Pendiente
+  de escribir» del detalle, filtro «pendientes del panel» y marca en la lista) hasta que la pasada lo
+  deja en los sistemas: un alta, cuando el SKU existe en todo su alcance (la web cuenta sólo si
+  está configurada y en `PRODUCTOS_ESCRIBIR_SISTEMAS`; si no, al encenderla el producto es un
+  aprobado que falta allá y se crea por el camino de siempre); una edición, cuando la lectura trae
+  ese valor en todos sus destinos. Desde ahí el producto vuelve a ser derivado de los tres. Un
+  cambio hecho en un sistema después de la edición la deja atrás y queda como evento `accion`
+  `descartada` (SKU, campo y quién la hizo). Con
+  `PRODUCTOS_ESCRIBIR=false` las pendientes se acumulan sin que nada salga del conector. Se
+  respaldan con las decisiones, por si el hub se pierde entre el alta y la pasada.
+- Los **archivos** (foto principal, fichas, manuales) quedan para el PR 7b.
 
 Protección mínima contra envíos desde otro sitio, sin cookies ni sesiones propias: un POST se rechaza
 con 403 si trae `Sec-Fetch-Site` y no es `same-origin` ni `none`, o si trae `Origin` y su host no es
@@ -515,8 +566,8 @@ La última pasada y la última falla viven en memoria y se pierden al reiniciar.
   la consulta periódica por recepción, sin tocar lo demás.
 - Factura sólo en pesos. Una cotización en otra moneda queda con error y aviso en el negocio.
 - Un workspace de Coreinbox ↔ un emisor de Emite DTE. Para más, una instancia por par.
-- El catálogo no crea productos en Coreinbox, ni los da de alta o edita desde el panel, ni sube
-  archivos (fase 1c). No borra en ningún sistema ni cambia códigos.
+- El catálogo sólo crea en Coreinbox lo que nace en el panel. No sube archivos (PR 7b), no borra en
+  ningún sistema ni cambia códigos.
 - Un histórico adoptado sigue con `origen=historial` en Emite DTE: la API todavía no deja cambiarlo.
 - No lee las variaciones de los productos variables: sólo el SKU del padre.
 - No detecta los productos borrados en Coreinbox ni en la web: se quedan con su última lectura.

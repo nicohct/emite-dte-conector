@@ -339,8 +339,16 @@ const EVENTOS_SQL = `
          sku, motivo, NULL, NULL, NULL, NULL
   FROM catalogo_empates
   UNION ALL
-  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL, NULL, usuario, NULL, NULL,
-         NULL, NULL
+  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL,
+         CASE WHEN accion IN ('alta', 'edicion', 'descartada')
+           THEN json_extract(detalle, '$.sku') END,
+         CASE WHEN accion IN ('alta', 'edicion')
+           THEN json_extract(detalle, '$.sku') || COALESCE(' · ' || usuario, '')
+           WHEN accion = 'descartada'
+           THEN json_extract(detalle, '$.sku') || ' · ' || json_extract(detalle, '$.campo')
+             || COALESCE(' · ' || usuario, '')
+           ELSE usuario END,
+         NULL, NULL, NULL, NULL
   FROM catalogo_acciones
   UNION ALL
   SELECT 'productos', 'escritura', estado, en, id_externo,

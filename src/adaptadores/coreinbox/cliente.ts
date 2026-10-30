@@ -120,11 +120,12 @@ export type CambiosProductoCoreinbox = Partial<{
   unitPrice: number;
   isActive: boolean;
   categoryId: string | null;
+  type: 'product' | 'service';
 }>;
 
 /**
  * Cuerpo de `POST /products` (`CreateProductDto`): sólo lo que el catálogo lee. Sin listas de
- * precios. El catálogo no lo usa todavía: la fase 1c decide si el hub llega a crear en Coreinbox.
+ * precios. El catálogo lo usa sólo para lo que nace en el panel (fase 1c).
  */
 export interface ProductoNuevoCoreinbox {
   name: string;
@@ -133,6 +134,7 @@ export interface ProductoNuevoCoreinbox {
   unitPrice: number;
   currencyCode: 'CLP';
   isTaxable?: boolean;
+  /** Sin `isActive`: el alta lo crea activo y un producto inactivo se desactiva con `PATCH`. */
   categoryId?: string | null;
 }
 

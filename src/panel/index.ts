@@ -4,15 +4,21 @@
  * proceso y agrega `X-Emite-Usuario`; nunca se expone a Internet.
  *
  * Lee todo de `Estado`. Los únicos POST son las decisiones del catálogo
- * (`/panel/acciones/{reglas|empates|conflictos|visibilidad|categorias}`), que usan la misma lógica
- * que la API JSON y sólo cambian el registro: la pasada de escritura las lleva a los sistemas.
+ * (`/panel/acciones/{reglas|empates|conflictos|visibilidad|categorias|alta|edicion}`; las dos
+ * últimas dan de alta y editan productos), que usan la misma lógica que la API JSON y sólo cambian
+ * el registro: la pasada de escritura las lleva a los sistemas.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Estado, FlujoEvento } from '../estado.js';
 import { aplicarAccion, ErrorPeticion, esAccion } from '../flujos/productos/acciones.js';
 import { log } from '../log.js';
 import type { RespuestaSalud } from '../salud.js';
-import { filtroCatalogoDe, pantallaProducto, pantallaProductos } from './catalogo.js';
+import {
+  filtroCatalogoDe,
+  pantallaNuevo,
+  pantallaProducto,
+  pantallaProductos,
+} from './catalogo.js';
 import {
   pantallaConflictos,
   pantallaHistoricos,
@@ -126,6 +132,8 @@ export function crearPanel(d: DependenciasPanel) {
       } else if (ruta === 'productos') {
         const f = filtroCatalogoDe(url.searchParams, POR_PAGINA);
         html200('Productos', 'productos', pantallaProductos(registro, f, base));
+      } else if (ruta === 'productos/nuevo') {
+        html200('Nuevo producto', 'productos', pantallaNuevo(registro, base));
       } else if (partes.length === 2 && partes[0] === 'productos' && partes[1]) {
         const sku = decodificar(partes[1]);
         const cuerpo = sku === null ? null : pantallaProducto(registro, sku, base);

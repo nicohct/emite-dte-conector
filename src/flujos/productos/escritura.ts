@@ -4,8 +4,9 @@
  * (`escrituras` y `crearEn`) y los empates confirmados con los históricos de Emite DTE.
  *
  * - **Orden por SKU:** adoptar el histórico con el código exacto (empate confirmado), crear lo que
- *   falte del alcance (en Emite DTE y, si está aprobado, en la web; nunca en Coreinbox), fusionar
- *   los demás históricos confirmados en el canónico y escribir los campos que difieren.
+ *   falte del alcance (en Emite DTE y, si está aprobado, en la web; en Coreinbox sólo un alta del
+ *   panel), fusionar los demás históricos confirmados en el canónico y escribir los campos que
+ *   difieren. Lo creado queda como su lectura, con el eco marcado.
  * - **Eco:** cada escritura anota `escritoValor` en el campo del sistema destino; la lectura
  *   siguiente que lo devuelve no es un cambio. Mientras no se vuelve a leer, no se reescribe.
  * - **Fallas:** una transitoria deja el SKU para la pasada siguiente y no se le escribe más a ese
@@ -14,7 +15,12 @@
  *   mano» en el SKU.
  * - **Nunca** se borra nada ni se cambia un código.
  */
-import type { CategoriaCoreinbox, Coreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import type {
+  CategoriaCoreinbox,
+  Coreinbox,
+  ProductoCoreinbox,
+  ProductoNuevoCoreinbox,
+} from '../../adaptadores/coreinbox/cliente.js';
 import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
 import type {
   CambiosProducto,
@@ -41,7 +47,14 @@ import type { Estado } from '../../estado.js';
 import { log } from '../../log.js';
 import { esTransitorio } from '../comun.js';
 import { TASA_IVA, netoDesdeBruto } from './canonico.js';
-import { desdeEmite, desdeWoo, horaUtc, recalcular, recalcularTodo } from './lectura.js';
+import {
+  desdeCoreinbox,
+  desdeEmite,
+  desdeWoo,
+  horaUtc,
+  recalcular,
+  recalcularTodo,
+} from './lectura.js';
 
 export interface DependenciasEscritura {
   coreinbox: Coreinbox;
@@ -200,6 +213,64 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
   const categoriaCoreinbox = async (nombre: string): Promise<string | null> => {
     categorias ??= new Map((await d.coreinbox.categorias()).map((c) => [c.name.trim(), c]));
     return categorias.get(nombre.trim())?.id ?? null;
+  };
+
+  // --- Coreinbox: crear sólo lo que nació en el panel ---
+
+  const crearEnCoreinbox = async (p: ProductoCatalogo): Promise<void> => {
+    const alta = registro.alta(p.sku);
+    if (!alta) return;
+    const exento = alta.exento;
+    // La carga es el alta: la categoría va por nombre y se resuelve a su id al mandarla.
+    const datos: ProductoNuevoCoreinbox = {
+      name: alta.nombre,
+      sku: alta.sku,
+      type: alta.tipo === 'servicio' ? 'service' : 'product',
+      unitPrice: netoDesdeBruto(alta.precio, exento ? 0 : TASA_IVA),
+      currencyCode: 'CLP',
+      isTaxable: !exento,
+    };
+    let sinCategoria = false;
+    const creado = await operar(
+      {
+        sku: p.sku,
+        sistema: 'coreinbox',
+        operacion: 'crear',
+        carga: { ...datos, categoria: alta.categoria },
+      },
+      async (): Promise<ProductoCoreinbox> => {
+        const categoryId = alta.categoria ? await categoriaCoreinbox(alta.categoria) : null;
+        sinCategoria = alta.categoria !== null && categoryId === null;
+        const nuevo = await d.coreinbox.crearProducto({
+          ...datos,
+          ...(categoryId ? { categoryId } : {}),
+        });
+        // `CreateProductDto` no acepta `isActive`: un alta inactiva se desactiva enseguida.
+        return alta.activo ? nuevo : d.coreinbox.actualizarProducto(nuevo.id, { isActive: false });
+      },
+    );
+    if (!creado.ok) return;
+    const porId = new Map([...(categorias?.values() ?? [])].map((c) => [c.id, c]));
+    quedarCon(desdeCoreinbox(d.coreinbox, creado.valor, p.sku, porId, en).lectura, [
+      'nombre',
+      'precio',
+      'activo',
+      'tipo',
+      'categoria',
+    ]);
+    r.creados++;
+    const aviso = sinCategoria
+      ? `; sin categoría: «${alta.categoria ?? ''}» no existe en Coreinbox`
+      : '';
+    evento('creado', p.sku, 'coreinbox', {
+      idExterno: creado.valor.id,
+      mensaje: `creado en Coreinbox desde el panel${aviso}`,
+    });
+    log(sinCategoria ? 'warn' : 'info', 'producto del panel creado en Coreinbox', {
+      sku: p.sku,
+      coreinboxId: creado.valor.id,
+      ...(sinCategoria ? { categoriaQueNoExiste: alta.categoria } : {}),
+    });
   };
 
   // --- Emite DTE: adoptar, crear y fusionar ---
@@ -409,6 +480,9 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
           cambios.unitPrice = netoDesdeBruto(w.valor, tasa);
         }
         if (w.campo === 'activo') cambios.isActive = w.valor;
+        if (w.campo === 'tipo' && (w.valor === 'bien' || w.valor === 'servicio')) {
+          cambios.type = w.valor === 'servicio' ? 'service' : 'product';
+        }
         if (w.campo === 'categoria' && typeof w.valor === 'string') {
           const id = await categoriaCoreinbox(w.valor);
           if (id) cambios.categoryId = id;
@@ -431,7 +505,9 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       escribir = () => woo.actualizarProducto(Number(lectura.idExterno), cambios);
     } else {
       const cambios: CambiosProducto = {};
-      const exento = lectura.campos.exento?.valor === true;
+      const nuevoExento = porEscribir.find((w) => w.campo === 'exento')?.valor;
+      const exento =
+        typeof nuevoExento === 'boolean' ? nuevoExento : lectura.campos.exento?.valor === true;
       for (const w of porEscribir) {
         if (w.campo === 'nombre' && typeof w.valor === 'string') cambios.nombre = w.valor;
         if (w.campo === 'precio' && typeof w.valor === 'number') {
@@ -442,6 +518,16 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
           cambios.tipo = w.valor;
         }
         if (w.campo === 'categoria' && typeof w.valor === 'string') cambios.categoria = w.valor;
+        if (w.campo === 'exento' && typeof w.valor === 'boolean') cambios.exento = w.valor;
+      }
+      // El neto depende de la exención: al cambiarla se manda el neto que conserva el bruto.
+      const bruto = p.canonico.precio?.valor;
+      if (
+        cambios.exento !== undefined &&
+        cambios.precioNeto === undefined &&
+        typeof bruto === 'number'
+      ) {
+        cambios.precioNeto = netoEmite(p, bruto, exento);
       }
       carga = cambios;
       escribir = () => d.emite.actualizarProducto(lectura.idExterno, cambios);
@@ -471,6 +557,22 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
     });
   };
 
+  /**
+   * Un alta aprobada no espera a una web sin configurar o fuera de `PRODUCTOS_ESCRIBIR_SISTEMAS`:
+   * se cierra al existir en Coreinbox y Emite DTE, y cuando la web se encienda el producto es un
+   * aprobado que falta allá y se crea por el camino de siempre.
+   */
+  const webCuenta = d.sistemas.includes('woocommerce') && d.woocommerce !== null;
+  const cerrarAlta = (p: ProductoCatalogo): boolean => {
+    if (webCuenta || !registro.alta(p.sku)) return false;
+    const requeridos = p.alcance.filter((s) => s !== 'woocommerce');
+    if (!requeridos.every((s) => p.presentes.includes(s))) return false;
+    registro.quitarAlta(p.sku);
+    log('info', 'el alta del panel ya está en su alcance sin la web', { sku: p.sku });
+    recalcular(registro, p.sku);
+    return true;
+  };
+
   // --- Por SKU ---
 
   const conEmpates = new Set(
@@ -490,10 +592,16 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       recalcular(registro, sku);
       p = registro.producto(sku) ?? p;
     }
+    if (p.crearEn?.includes('coreinbox') && habilitado('coreinbox')) {
+      await crearEnCoreinbox(p);
+      recalcular(registro, sku);
+      p = registro.producto(sku) ?? p;
+    }
     if (p.crearEn?.includes('emite') && habilitado('emite')) await crearEnEmite(p);
     if (p.crearEn?.includes('woocommerce') && habilitado('woocommerce')) await crearEnWeb(p);
     recalcular(registro, sku);
     p = registro.producto(sku) ?? p;
+    if (cerrarAlta(p)) p = registro.producto(sku) ?? p;
 
     for (const sistema of ['coreinbox', 'woocommerce', 'emite'] as const) {
       const plan = (p.escrituras ?? []).filter((w) => w.sistema === sistema);

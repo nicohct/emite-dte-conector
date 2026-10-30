@@ -8,6 +8,7 @@ import { pasada } from './flujos/cotizaciones/pasada.js';
 import { atenderCatalogo, configurarCatalogo } from './flujos/productos/api.js';
 import { pasadaCatalogo } from './flujos/productos/catalogo.js';
 import { log } from './log.js';
+import { crearDescargaImagen } from './panel/imagen.js';
 import { crearPanel } from './panel/index.js';
 import { Salud } from './salud.js';
 import { crearServidor } from './servidor.js';
@@ -33,8 +34,9 @@ const servidor = crearServidor(
   [
     crearPanel({
       salud: () => salud.respuesta(),
-      estadoRuta: config.estadoRuta,
+      estado,
       enlaces: { emite: config.emite.urlPublica },
+      descargarImagen: crearDescargaImagen({ coreinbox, tienda: config.woocommerce?.url ?? null }),
     }),
     atenderCatalogo,
   ],

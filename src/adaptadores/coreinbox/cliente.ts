@@ -248,6 +248,25 @@ export class Coreinbox {
     return `${this.base}/api/v1/products/${encodeURIComponent(id)}`;
   }
 
+  /**
+   * GET con la clave a una URL de esta misma API (la de `urlImagen`, por ejemplo). Devuelve la
+   * respuesta sin leer, para que quien la pide controle el tamaño; una URL de otro lado se rechaza
+   * para no mandar la clave fuera.
+   */
+  async archivo(url: string): Promise<Response> {
+    if (!url.startsWith(`${this.base}/api/v1/`)) {
+      throw new ErrorCoreinbox(400, 'URL_AJENA', `la URL no es de la API de Coreinbox: ${url}`);
+    }
+    try {
+      return await this.http(url, {
+        headers: { authorization: `Bearer ${this.apiKey}`, accept: 'image/*' },
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch (e) {
+      throw new ErrorCoreinbox(0, 'RED', `Coreinbox no responde: ${String(e)}`);
+    }
+  }
+
   async categorias(): Promise<CategoriaCoreinbox[]> {
     return (await this.pedir<CategoriaCoreinbox[]>('GET', '/products/categories')).data;
   }

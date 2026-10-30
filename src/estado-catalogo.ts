@@ -510,6 +510,25 @@ export class RegistroCatalogo {
     }));
   }
 
+  /**
+   * Las imágenes del índice de un SKU, por sistema y en el orden en que el sistema las entregó: la
+   * primera de cada sistema es su foto principal.
+   */
+  fotos(sku: string): EntradaIndice[] {
+    const filas = this.db
+      .prepare(
+        `SELECT * FROM catalogo_indice WHERE sku = ? AND tipo = 'imagen' ORDER BY sistema, rowid`,
+      )
+      .all(sku) as Fila[];
+    return filas.map((f) => ({
+      sistema: f.sistema as SistemaCatalogo,
+      tipo: f.tipo as string,
+      url: f.url as string,
+      hash: f.hash as string,
+      leidoEn: f.leido_en as string,
+    }));
+  }
+
   // --- Históricos de Emite DTE ---
 
   guardarHistorico(h: Omit<HistoricoEmite, 'aliasSku'>): void {
@@ -719,6 +738,14 @@ export class RegistroCatalogo {
          ${soloAbiertos ? `AND estado = 'abierto'` : ''} ORDER BY id`,
       )
       .all(sku) as Fila[];
+    return filas.map(conflictoDesdeFila);
+  }
+
+  /** Los conflictos abiertos de todo el catálogo, por SKU y campo. */
+  conflictosAbiertos(): Conflicto[] {
+    const filas = this.db
+      .prepare(`SELECT * FROM catalogo_conflictos WHERE estado = 'abierto' ORDER BY sku, campo, id`)
+      .all() as Fila[];
     return filas.map(conflictoDesdeFila);
   }
 

@@ -2,11 +2,13 @@
  * Lo que el conector recuerda entre pasadas, en SQLite (`node:sqlite`, sin dependencias): los
  * cursores de sincronización (cotizaciones y productos), qué cotización de Coreinbox quedó en
  * Emite DTE (o con qué error), qué producto pasó al catálogo (o por qué se omitió), qué webhooks
- * ya se procesaron y el registro canónico del catálogo (`estado.catalogo`, en `estado-catalogo.ts`).
+ * ya se procesaron, el registro canónico del catálogo (`estado.catalogo`, en `estado-catalogo.ts`)
+ * y la caché de miniaturas del panel (`estado.miniaturas`).
  */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RegistroCatalogo } from './estado-catalogo.js';
+import { CacheMiniaturas } from './estado-miniaturas.js';
 
 // `process.getBuiltinModule` en vez de `import`: las herramientas que analizan los imports (vite,
 // vitest) todavía no reconocen `node:sqlite` como módulo nativo.
@@ -67,6 +69,10 @@ export interface Evento {
   sku: string | null;
   /** Error, motivo, número de cotización, campo en conflicto o usuario de la acción. */
   mensaje: string | null;
+  /** Número de la cotización en Coreinbox (también con error); null en los demás tipos. */
+  referencia: string | null;
+  /** Número de la cotización creada en Emite DTE; null en los demás tipos. */
+  emiteNumero: number | null;
 }
 
 export interface FiltroEventos {
@@ -87,6 +93,8 @@ export class Estado {
   private readonly db: DatabaseSync;
   /** Registro canónico de productos por SKU (fase 1 del hub). */
   readonly catalogo: RegistroCatalogo;
+  /** Copia de la foto principal por SKU para el panel; caché derivado del índice. */
+  readonly miniaturas: CacheMiniaturas;
 
   constructor(ruta: string) {
     if (ruta !== ':memory:') mkdirSync(dirname(ruta), { recursive: true });
@@ -120,6 +128,7 @@ export class Estado {
       leer: (nombre) => this.clave(nombre),
       guardar: (nombre, valor) => this.guardarClave(nombre, valor),
     });
+    this.miniaturas = new CacheMiniaturas(this.db);
   }
 
   /** Cursor de las cotizaciones aceptadas. */
@@ -263,6 +272,8 @@ export class Estado {
       emiteId: (f.emite_id as string | null) ?? null,
       sku: (f.sku as string | null) ?? null,
       mensaje: (f.mensaje as string | null) ?? null,
+      referencia: (f.referencia as string | null) ?? null,
+      emiteNumero: (f.emite_numero as number | null) ?? null,
     }));
   }
 
@@ -301,23 +312,26 @@ export class Estado {
 const EVENTOS_SQL = `
   SELECT 'cotizaciones' AS flujo, 'cotizacion' AS tipo, estado, actualizado_en AS en,
          quote_id AS id_externo, emite_id, NULL AS sku,
-         CASE WHEN estado = 'error' THEN error ELSE quote_number END AS mensaje
+         CASE WHEN estado = 'error' THEN error ELSE quote_number END AS mensaje,
+         quote_number AS referencia, emite_numero
   FROM cotizaciones
   UNION ALL
-  SELECT 'productos', 'producto', estado, actualizado_en, product_id, emite_id, sku, error
+  SELECT 'productos', 'producto', estado, actualizado_en, product_id, emite_id, sku, error,
+         NULL, NULL
   FROM productos
   UNION ALL
-  SELECT 'cotizaciones', 'webhook', 'visto', visto_en, id, NULL, NULL, NULL FROM webhooks_vistos
+  SELECT 'cotizaciones', 'webhook', 'visto', visto_en, id, NULL, NULL, NULL, NULL, NULL
+  FROM webhooks_vistos
   UNION ALL
   SELECT 'productos', 'conflicto', estado, COALESCE(resuelto_en, abierto_en), CAST(id AS TEXT),
-         NULL, sku, campo
+         NULL, sku, campo, NULL, NULL
   FROM catalogo_conflictos
   UNION ALL
   SELECT 'productos', 'empate', estado, COALESCE(decidido_en, propuesto_en), emite_id, emite_id,
-         sku, motivo
+         sku, motivo, NULL, NULL
   FROM catalogo_empates
   UNION ALL
-  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL, NULL, usuario
+  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL, NULL, usuario, NULL, NULL
   FROM catalogo_acciones`;
 
 function condicionEventos(filtro: Omit<FiltroEventos, 'pagina' | 'porPagina'>): {

@@ -93,8 +93,18 @@ describe('Estado: eventos', () => {
       emiteId: 'cot-1',
       sku: null,
       mensaje: 'C-1001',
+      referencia: 'C-1001',
+      emiteNumero: 1,
     });
-    expect(eventos.find((e) => e.idExterno === 'q2')?.mensaje).toBe('RECEPTOR: falta el RUT');
+    expect(eventos.find((e) => e.idExterno === 'q2')).toMatchObject({
+      mensaje: 'RECEPTOR: falta el RUT',
+      referencia: 'C-1002',
+      emiteNumero: null,
+    });
+    expect(eventos.find((e) => e.tipo === 'producto')).toMatchObject({
+      referencia: null,
+      emiteNumero: null,
+    });
     expect(eventos.find((e) => e.tipo === 'producto')).toMatchObject({
       flujo: 'productos',
       sku: 'SKU-001',

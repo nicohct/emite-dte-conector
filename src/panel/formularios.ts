@@ -85,6 +85,8 @@ export function cuerpoDe(accion: NombreAccion, f: URLSearchParams): unknown {
       }
       return { skus: f.getAll('sku'), estado: f.get('estado') };
     }
+    case 'categorias':
+      return { categorias: f.getAll('categoria'), fuera: f.get('fuera') === '1' };
   }
 }
 

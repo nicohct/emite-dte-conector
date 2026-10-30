@@ -1,16 +1,20 @@
 /**
  * Las pantallas de decisiones sobre el catálogo: empates de históricos, conflictos abiertos,
- * visibilidad web y «quién manda». Cada formulario manda a `POST acciones/{…}`, que sólo cambia el
- * registro del conector hasta la fase 1b.
+ * visibilidad web (con las categorías fuera de la web) y «quién manda». Cada formulario manda a
+ * `POST acciones/{…}`, que cambia el registro del conector; la pasada de escritura lleva las
+ * decisiones a los sistemas.
  */
-import type { EstadoEmpate, RegistroCatalogo } from '../estado-catalogo.js';
+import type { EstadoEmpate, ProductoCatalogo, RegistroCatalogo } from '../estado-catalogo.js';
 import { CAMPOS_CATALOGO } from '../estado-catalogo.js';
+import { CAMPOS_ULTIMO_CAMBIO } from '../flujos/productos/canonico.js';
 import {
   boton,
   etiquetaVisibilidad,
   foto,
   formulario,
+  motivoVisibilidad,
   nada,
+  NOMBRE_FUENTE,
   NOMBRE_SISTEMA,
   selectFuente,
   tablaConflicto,
@@ -166,7 +170,8 @@ export function pantallaHistoricos(
     }
     ${paginas(todos.length, n, porPagina, (p) => conPagina(filtro, p))}
     <p class="tenue">
-      Confirmar un empate sólo lo anota en el registro: la fusión en Emite DTE llega con la fase 1b.
+      Confirmar un empate lo anota en el registro; la fusión en Emite DTE la hace la siguiente
+      pasada de escritura, si está encendida.
     </p>`;
 }
 
@@ -239,7 +244,8 @@ export function pantallaVisibilidad(
   return html`<h1>Visibilidad web</h1>
     <p class="tenue">
       Productos que no están en la web y se proponen para publicarse. Un servicio no se ofrece en la
-      web. Aprobar sólo lo anota: la publicación llega con la fase 1b.
+      web, y lo que ya está en la web queda aprobado. Aprobar o rechazar lo anota; la siguiente
+      pasada de escritura lo lleva a la web, si está encendida.
     </p>
     ${
       items.length
@@ -282,7 +288,10 @@ export function pantallaVisibilidad(
                           <td>${valor('nombre', p.canonico.nombre?.valor)}</td>
                           <td>${valor('precio', p.canonico.precio?.valor)}</td>
                           <td>${p.tipo ?? nada}</td>
-                          <td>${etiquetaVisibilidad(p.visibilidadWeb)}</td>
+                          <td>
+                            ${etiquetaVisibilidad(p.visibilidadWeb)}
+                            ${motivoVisibilidad(p.motivoVisibilidad)}
+                          </td>
                           <td>
                             ${
                               p.tipo === 'servicio'
@@ -306,7 +315,146 @@ export function pantallaVisibilidad(
           )
         : html`<p class="tenue">No hay productos propuestos para la web.</p>`
     }
-    ${paginas(total, n, porPagina, (p) => conPagina(new URLSearchParams(), p))}`;
+    ${paginas(total, n, porPagina, (p) => conPagina(new URLSearchParams(), p))}
+    ${seccionCategorias(registro, base, volver)}
+    ${seccionRechazadosPorCategoria(registro, base, volver)}`;
+}
+
+const MAX_RECHAZADOS = 100;
+
+/** Las categorías de Coreinbox cuyos productos no van a la web, y el formulario para sumar más. */
+function seccionCategorias(registro: RegistroCatalogo, base: string, volver: string): Html {
+  const fuera = registro.categoriasFuera();
+  const nombres = new Set(fuera.map((c) => c.categoria));
+  const libres = registro.categoriasLeidas().filter((c) => !nombres.has(c));
+  return html`<section class="bloque">
+    <h2>Categorías fuera de la web</h2>
+    <p class="tenue">
+      Los productos de una categoría marcada no van a la web mientras nadie los apruebe uno a uno.
+    </p>
+    ${
+      fuera.length
+        ? html`<div class="tabla">
+            <table>
+              <thead>
+                <tr>
+                  <th>Categoría</th>
+                  <th>Quién lo marcó</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${fuera.map(
+                  (c) =>
+                    html`<tr>
+                      <td>${c.categoria}</td>
+                      <td>${c.usuario ?? nada} ${fecha(c.en)}</td>
+                      <td>
+                        ${formulario(
+                          base,
+                          'categorias',
+                          volver,
+                          html`<div class="botones">
+                            <input type="hidden" name="categoria" value="${c.categoria}" />
+                            <button type="submit" name="fuera" value="0">Volver a la web</button>
+                          </div>`,
+                        )}
+                      </td>
+                    </tr>`,
+                )}
+              </tbody>
+            </table>
+          </div>`
+        : html`<p class="tenue">Ninguna.</p>`
+    }
+    ${
+      libres.length
+        ? formulario(
+            base,
+            'categorias',
+            volver,
+            html`<div class="lote">
+              <strong>Sacar de la web</strong>
+              ${libres.map(
+                (c) =>
+                  html`<label class="casilla"
+                    ><input type="checkbox" name="categoria" value="${c}" /> ${c}</label
+                  >`,
+              )}
+              <button type="submit" name="fuera" value="1">Marcar como fuera de la web</button>
+            </div>`,
+          )
+        : html`<p class="tenue">No hay más categorías de Coreinbox que marcar.</p>`
+    }
+  </section>`;
+}
+
+/** Los SKUs rechazados sólo por su categoría, para aprobarlos uno a uno. */
+function seccionRechazadosPorCategoria(
+  registro: RegistroCatalogo,
+  base: string,
+  volver: string,
+): Html {
+  const { items: visibles, total } = registro.listar(
+    { rechazadoPorCategoria: true },
+    1,
+    MAX_RECHAZADOS,
+  );
+  return html`<section class="bloque">
+    <h2>Rechazados por su categoría</h2>
+    ${
+      visibles.length
+        ? html`${formulario(
+            base,
+            'visibilidad',
+            volver,
+            html`<div class="tabla">
+                <table>
+                  <thead>
+                    <tr>
+                      <th><span class="tenue">Lote</span></th>
+                      <th>SKU</th>
+                      <th>Nombre</th>
+                      <th>Categoría</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${visibles.map(
+                      (p) =>
+                        html`<tr>
+                          <td>
+                            <input
+                              type="checkbox"
+                              name="sku"
+                              value="${p.sku}"
+                              aria-label="Elegir ${p.sku}"
+                            />
+                          </td>
+                          <td>${enlaceSku(p.sku, base)}</td>
+                          <td>${valor('nombre', p.canonico.nombre?.valor)}</td>
+                          <td>${valor('categoria', p.canonico.categoria?.valor)}</td>
+                          <td>
+                            <div class="botones">${boton('Aprobar', [p.sku, 'aprobado'])}</div>
+                          </td>
+                        </tr>`,
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div class="lote">
+                <strong>Los elegidos</strong>
+                <button type="submit" name="estado" value="aprobado">Aprobar</button>
+              </div>`,
+          )}
+          ${
+            total > visibles.length
+              ? html`<p class="tenue">Se muestran ${visibles.length} de ${total}.</p>`
+              : ''
+          }`
+        : html`<p class="tenue">Ninguno.</p>`
+    }
+  </section>`;
 }
 
 // --- Quién manda ---
@@ -317,8 +465,13 @@ export function pantallaReglas(registro: RegistroCatalogo, base: string): Html {
   const porSku = reglas.filter((r) => r.ambito !== '*');
   return html`<h1>Quién manda</h1>
     <p class="tenue">
-      Qué sistema manda en cada campo para todo el catálogo. Sin regla, manda la de arranque. Para
-      fijarlo en lote por SKU, elíjalos en la lista de productos.
+      Qué sistema manda en cada campo para todo el catálogo. Hay dos modos. Con un sistema
+      propietario, ese sistema manda y los demás se corrigen a su valor. Con «último cambio», gana
+      el cambio más reciente que no sea eco de una escritura del conector; sólo vale para
+      ${CAMPOS_ULTIMO_CAMBIO.join(', ')}. Sin regla: nombre y precio van por último cambio (antes de
+      la primera escritura, manda la regla de arranque: la web y luego Coreinbox); activo, tipo y
+      categoría los manda Coreinbox, y exento, Emite DTE. Para fijarlo en lote por SKU, elíjalos en
+      la lista de productos.
     </p>
     <div class="tabla">
       <table>
@@ -336,7 +489,7 @@ export function pantallaReglas(registro: RegistroCatalogo, base: string): Html {
             return html`<tr>
               <td>${campo}</td>
               <td>
-                ${r ? NOMBRE_SISTEMA[r.fuente] : html`<span class="tenue">regla de arranque</span>`}
+                ${r ? NOMBRE_FUENTE[r.fuente] : html`<span class="tenue">modo por defecto</span>`}
               </td>
               <td>${r ? html`${r.usuario ?? nada} ${fecha(r.en)}` : nada}</td>
               <td>
@@ -346,7 +499,7 @@ export function pantallaReglas(registro: RegistroCatalogo, base: string): Html {
                   'reglas',
                   html`<div class="botones">
                     <input type="hidden" name="campo" value="${campo}" />
-                    ${selectFuente('fuente', r?.fuente ?? null, 'regla de arranque')}
+                    ${selectFuente('fuente', r?.fuente ?? null, 'modo por defecto', campo)}
                     <button type="submit">Fijar</button>
                   </div>`,
                 )}
@@ -376,7 +529,7 @@ export function pantallaReglas(registro: RegistroCatalogo, base: string): Html {
                       html`<tr>
                         <td>${enlaceSku(r.ambito, base)}</td>
                         <td>${r.campo}</td>
-                        <td>${NOMBRE_SISTEMA[r.fuente]}</td>
+                        <td>${NOMBRE_FUENTE[r.fuente]}</td>
                         <td>${r.usuario ?? nada} ${fecha(r.en)}</td>
                       </tr>`,
                   )}

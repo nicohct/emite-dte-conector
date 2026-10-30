@@ -68,6 +68,20 @@ describe('cuerpoDe', () => {
     ).toEqual({ skus: ['A', 'B'], estado: 'rechazado' });
   });
 
+  it('categorias: las elegidas y si salen o vuelven a la web', () => {
+    expect(
+      cuerpoDe(
+        'categorias',
+        form(['categoria', 'Válvulas'], ['categoria', 'Bombas'], ['fuera', '1']),
+      ),
+    ).toEqual({ categorias: ['Válvulas', 'Bombas'], fuera: true });
+    expect(cuerpoDe('categorias', form(['categoria', 'Válvulas'], ['fuera', '0']))).toEqual({
+      categorias: ['Válvulas'],
+      fuera: false,
+    });
+    expect(cuerpoDe('categorias', form(['fuera', '1']))).toEqual({ categorias: [], fuera: true });
+  });
+
   it('un lote sin casillas da una lista vacía (la acción lo rechaza)', () => {
     expect(cuerpoDe('empates', form(['estado', 'confirmado']))).toEqual({ decisiones: [] });
     expect(cuerpoDe('conflictos', form(['fuente', 'emite']))).toEqual({ resoluciones: [] });

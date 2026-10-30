@@ -93,6 +93,8 @@ function origenDe(e: Evento): Html {
   if (e.tipo === 'empate') return html`histórico ${id}`;
   if (e.tipo === 'conflicto') return html`conflicto ${id}`;
   if (e.tipo === 'accion') return html`acción ${id}`;
+  if (e.tipo === 'escritura')
+    return html`${e.sistema ?? ''}${e.campo ? html` · ${e.campo}` : ''} ${id}`;
   return id;
 }
 
@@ -111,6 +113,7 @@ export const NOMBRE_TIPO: Record<TipoEvento, string> = {
   conflicto: 'Conflicto',
   empate: 'Empate de histórico',
   accion: 'Acción del panel',
+  escritura: 'Escritura',
 };
 
 function tablaEventos(eventos: Evento[], enlaces: Enlaces, base: string): Html {

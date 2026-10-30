@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Salud } from '../salud.js';
 import { crearServidor } from '../servidor.js';
 import { armar, AHORA, coreinbox, mundoInicial, T2, type Mundo } from '../prueba/catalogo.js';
+import { recalcularTodo } from '../flujos/productos/lectura.js';
 import { crearPanel } from './index.js';
 
 const USUARIO = 'admin@example.com';
@@ -85,6 +86,20 @@ function consulta(location: string | null) {
 const eventosDe = (m: Montaje, accion: string) =>
   m.estado.eventos({ estado: accion }).filter((e) => e.tipo === 'accion');
 
+/** Hace el POST, comprueba la redirección y devuelve la consulta de `location`. */
+async function aplicar(
+  base: string,
+  accion: string,
+  campos: Array<[string, string]>,
+  volver: string,
+) {
+  const r = await enviar(base, accion, [['volver', volver], ...campos]);
+  expect(r.status).toBe(303);
+  const location = r.headers.get('location') ?? '';
+  expect(location.startsWith(`../${volver.split('?')[0]}?`)).toBe(true);
+  return { location, q: consulta(location) };
+}
+
 describe('pantallas del catálogo', () => {
   it('flujos: la tarjeta Catálogo trae las cifras y los enlaces', async () => {
     const m = await cargado();
@@ -141,7 +156,8 @@ describe('pantallas del catálogo', () => {
       'SKU-006',
     ]);
     expect(await filas('diferencias=1')).toEqual(['SKU-005']);
-    expect(await filas('propuesto_web=1')).toEqual(['SKU-003', 'SKU-006']);
+    // SKU-006 es un borrador en la web: lo que está en la web ya está aprobado.
+    expect(await filas('propuesto_web=1')).toEqual(['SKU-003']);
     expect(await filas('historicos=1')).toEqual(['SKU-001', 'SKU-002', 'SKU-003', 'SKU-005']);
     expect(await filas('sin_sku=1')).toEqual(['SKU-002', 'SKU-003', 'SKU-005', 'SKU-006']);
     expect(await filas('conflicto=1')).toEqual([]);
@@ -227,7 +243,7 @@ describe('pantallas del catálogo', () => {
     for (const id of ['c1', '11', 'e5']) expect(r.html).toContain(`<span class="id">${id}</span>`);
 
     expect(r.html).toContain('<h2>Quién manda</h2>');
-    expect(r.html).toContain('Sin reglas: manda la regla de arranque.');
+    expect(r.html).toContain('Sin reglas: manda el modo por defecto de cada campo.');
     expect(r.html).toContain('<input type="hidden" name="sku" value="SKU-001" />');
 
     expect(r.html).toContain('<h2>Históricos de Emite DTE empatados</h2>');
@@ -287,7 +303,7 @@ describe('pantallas del catálogo', () => {
     expect(primero).toBeDefined();
     expect(r.html).toContain(`${primero?.motivo}:`);
     expect(r.html).toContain('alias de SKU-003');
-    expect(r.html).toContain('Confirmar un empate sólo lo anota en el registro');
+    expect(r.html).toContain('Confirmar un empate lo anota en el registro');
 
     const sin = await pagina(base, 'historicos?estado=sin_candidato');
     expect(sin.html).toContain('<span class="id">ZZZ</span>');
@@ -302,18 +318,18 @@ describe('pantallas del catálogo', () => {
   });
 
   it('conflictos: sin ninguno lo dice; con uno muestra los valores y los botones', async () => {
-    const mundo = mundoInicial();
-    const m = await cargado(mundo);
+    const m = await cargado();
     const base = await levantar(m);
     expect((await pagina(base, 'conflictos')).html).toContain('No hay conflictos abiertos.');
 
-    const [c1] = mundo.coreinbox;
-    const [w11] = mundo.woo;
-    if (!c1 || !w11) throw new Error('fixture');
-    Object.assign(c1, { unitPrice: '5042.02', updatedAt: T2 });
-    Object.assign(w11, { regular_price: '5500', date_modified_gmt: T2.slice(0, 19) });
-    await m.pasada();
-    m.peticiones.length = 0;
+    // Antes de la primera escritura la pasada de lectura no abre conflictos: se abre a mano.
+    m.estado.catalogo.abrirConflicto(
+      'SKU-001',
+      'precio',
+      { coreinbox: { valor: 6000, en: T2 }, woocommerce: { valor: 5500, en: T2 } },
+      T2,
+    );
+    recalcularTodo(m.estado.catalogo);
 
     const r = await pagina(base, 'conflictos');
     expect(r.status).toBe(200);
@@ -332,19 +348,171 @@ describe('pantallas del catálogo', () => {
     expect((await pagina(base, 'productos?conflicto=1')).html).toContain('SKU-001');
   });
 
-  it('visibilidad: SKU-003 y SKU-006 propuestos, con foto en hueco', async () => {
+  it('visibilidad: sólo SKU-003 propuesto (SKU-006 ya está en la web), con foto en hueco', async () => {
     const base = await levantar(await cargado());
     const r = await pagina(base, 'visibilidad');
     expect(r.status).toBe(200);
-    expect(skusDeFilas(r.html)).toEqual(['SKU-003', 'SKU-006']);
+    const tabla = r.html.slice(0, r.html.indexOf('Categorías fuera de la web'));
+    expect(skusDeFilas(tabla)).toEqual(['SKU-003']);
     expect(r.html).toContain('Repuesto sello');
     expect(r.html).not.toContain('<img');
-    expect(r.html).toContain('Llave de paso');
+    expect(r.html).not.toContain('Llave de paso');
     expect(r.html).toContain(
       '<button type="submit" name="estado" value="aprobado">Aprobar</button>',
     );
     expect(r.html).toContain('name="uno"');
     expect(r.html).toContain('propuesto');
+    expect(r.html).toContain('sin decisión');
+
+    const web = await pagina(base, 'productos/SKU-006');
+    expect(web.html).toContain('ya está en la web');
+  });
+
+  describe('categorías fuera de la web', () => {
+    async function conCategoria() {
+      const mundo = mundoInicial();
+      const c3 = mundo.coreinbox[2];
+      if (!c3) throw new Error('fixture');
+      Object.assign(c3, { categoryId: 'cat-1' });
+      return cargado(mundo);
+    }
+
+    it('ofrece las categorías leídas y la acción las saca de la web y las devuelve', async () => {
+      const m = await conCategoria();
+      const base = await levantar(m);
+      expect(m.estado.catalogo.categoriasLeidas()).toContain('Válvulas');
+      const antes = await pagina(base, 'visibilidad');
+      expect(antes.html).toContain('<h2>Categorías fuera de la web</h2>');
+      expect(antes.html).toMatch(/name="categoria"\s+value="Válvulas"/);
+      expect(antes.html).toContain('action="./acciones/categorias"');
+      expect(antes.html).toContain('<h2>Rechazados por su categoría</h2>');
+
+      const r = await aplicar(
+        base,
+        'categorias',
+        [
+          ['categoria', 'Válvulas'],
+          ['fuera', '1'],
+        ],
+        'visibilidad',
+      );
+      expect(r.location).toBe('../visibilidad?accion=categorias&aplicadas=1');
+      expect(m.estado.catalogo.categoriasFuera()).toMatchObject([
+        { categoria: 'Válvulas', usuario: USUARIO },
+      ]);
+      expect(eventosDe(m, 'categorias')).toMatchObject([{ mensaje: USUARIO }]);
+      expect(m.peticiones).toEqual([]);
+
+      // Sin decisión por SKU, la categoría pesa más que estar en la web (SKU-001).
+      expect(m.estado.catalogo.producto('SKU-003')).toMatchObject({
+        visibilidadWeb: 'rechazado',
+        motivoVisibilidad: 'categoria',
+      });
+      expect(m.estado.catalogo.producto('SKU-001')?.motivoVisibilidad).toBe('categoria');
+      const despues = await pagina(base, 'visibilidad');
+      expect(despues.html).toMatch(/<td>Válvulas<\/td>/);
+      expect(despues.html).toContain('Volver a la web');
+      expect(despues.html).not.toMatch(/<input type="checkbox" name="categoria"/);
+      const rechazados = despues.html.slice(despues.html.indexOf('Rechazados por su categoría'));
+      expect(skusDeFilas(rechazados)).toEqual(['SKU-001', 'SKU-003']);
+
+      // Aprobar el SKU por la pantalla usa la acción de visibilidad.
+      const aprobado = await aplicar(
+        base,
+        'visibilidad',
+        [['uno', JSON.stringify(['SKU-003', 'aprobado'])]],
+        'visibilidad',
+      );
+      expect(aprobado.q.get('aplicadas')).toBe('1');
+      expect(m.estado.catalogo.producto('SKU-003')?.visibilidadWeb).toBe('aprobado');
+      const sin = await pagina(base, 'visibilidad');
+      expect(skusDeFilas(sin.html.slice(sin.html.indexOf('Rechazados por su categoría')))).toEqual([
+        'SKU-001',
+      ]);
+
+      const vuelve = await aplicar(
+        base,
+        'categorias',
+        [
+          ['categoria', 'Válvulas'],
+          ['fuera', '0'],
+        ],
+        'visibilidad',
+      );
+      expect(vuelve.q.get('aplicadas')).toBe('1');
+      expect(m.estado.catalogo.categoriasFuera()).toEqual([]);
+    });
+
+    it('sin categorías vuelve como error', async () => {
+      const base = await levantar(await conCategoria());
+      const r = await aplicar(base, 'categorias', [['fuera', '1']], 'visibilidad');
+      expect(r.q.get('aplicadas')).toBe('0');
+      expect(r.q.getAll('error')).toHaveLength(1);
+    });
+  });
+
+  it('productos/SKU-003: lo que se escribirá y las escrituras recientes', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const p = m.estado.catalogo.producto('SKU-003');
+    expect(p?.crearEn?.length).toBeGreaterThan(0);
+    const vacia = await pagina(base, 'productos/SKU-001');
+    expect(vacia.html).toContain('<h2>Escrituras recientes</h2>');
+
+    m.estado.catalogo.registrarEvento({
+      en: T2,
+      estado: 'escrito',
+      sku: 'SKU-003',
+      sistema: 'woocommerce',
+      campo: 'precio',
+      antes: 1000,
+      valor: 1200,
+      mensaje: null,
+      idExterno: null,
+      clave: 'SKU-003|woocommerce|precio',
+    });
+    const r = await pagina(base, 'productos/SKU-003');
+    expect(r.html).toContain('<h2>Lo que se escribirá</h2>');
+    expect(r.html).toContain('Se crearía en:');
+    expect(r.html).toContain('<h2>Escrituras recientes</h2>');
+    expect(r.html).toContain('escrito');
+    expect(r.html).toMatch(
+      /\$ <span class=\"cifra\">1\.000<\/span> → \$ <span class=\"cifra\">1\.200<\/span>/,
+    );
+  });
+
+  it('productos/SKU-001: muestra el modo de cada valor canónico', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const modos = Object.values(m.estado.catalogo.producto('SKU-001')?.canonico ?? {}).map(
+      (c) => c.modo,
+    );
+    expect(modos).toContain('ultimo');
+    const r = await pagina(base, 'productos/SKU-001');
+    expect(r.html).toContain('último cambio');
+    expect(r.html).toContain('propietario');
+  });
+
+  it('reglas: «último cambio» sólo se ofrece en los campos donde vale', async () => {
+    const base = await levantar(await cargado());
+    const r = await pagina(base, 'reglas');
+    const filas = r.html.split('<tr>').filter((f) => f.includes('name="campo"'));
+    expect(filas).toHaveLength(6);
+    for (const f of filas) {
+      const campo = /name="campo"\s+value="([^"]+)"/.exec(f)?.[1] ?? '';
+      expect(f.includes('value="ultimo"')).toBe(['nombre', 'precio', 'activo'].includes(campo));
+    }
+    await enviar(base, 'reglas', [
+      ['volver', 'reglas'],
+      ['campo', 'precio'],
+      ['fuente', 'ultimo'],
+    ]);
+    const despues = await pagina(base, 'reglas');
+    expect(despues.html).toMatch(/<td>precio<\/td>\s*<td>\s*último cambio/);
+    expect(despues.html).toMatch(/value="ultimo"\s+selected/);
+
+    const lote = await pagina(base, 'productos');
+    expect(lote.html).toContain('value="ultimo"');
   });
 
   it('reglas: una fila por campo y las reglas por SKU una vez fijadas', async () => {
@@ -355,7 +523,8 @@ describe('pantallas del catálogo', () => {
     for (const campo of ['nombre', 'precio', 'activo', 'tipo', 'categoria', 'exento']) {
       expect(r.html).toContain(`<td>${campo}</td>`);
     }
-    expect(r.html).toContain('regla de arranque');
+    expect(r.html).toContain('modo por defecto');
+    expect(r.html).toContain('«último cambio»');
     expect(r.html).toContain('Ninguna.');
     expect((r.html.match(/action="\.\/acciones\/reglas"/g) ?? []).length).toBe(6);
 
@@ -396,20 +565,6 @@ describe('pantallas del catálogo', () => {
 });
 
 describe('acciones por formulario', () => {
-  /** Hace el POST, comprueba la redirección y devuelve la consulta de `location`. */
-  async function aplicar(
-    base: string,
-    accion: string,
-    campos: Array<[string, string]>,
-    volver: string,
-  ) {
-    const r = await enviar(base, accion, [['volver', volver], ...campos]);
-    expect(r.status).toBe(303);
-    const location = r.headers.get('location') ?? '';
-    expect(location.startsWith(`../${volver.split('?')[0]}?`)).toBe(true);
-    return { location, q: consulta(location) };
-  }
-
   it('reglas: la de todo el catálogo y la de un lote de SKUs', async () => {
     const m = await cargado();
     const base = await levantar(m);
@@ -522,17 +677,20 @@ describe('acciones por formulario', () => {
 
   describe('conflictos', () => {
     async function conConflictos() {
-      const mundo = mundoInicial();
-      const m = await cargado(mundo);
-      const [c1, , , , c5] = mundo.coreinbox;
-      const [w11, w15] = mundo.woo;
-      if (!c1 || !c5 || !w11 || !w15) throw new Error('fixture');
-      Object.assign(c1, { unitPrice: '5042.02', updatedAt: T2 });
-      Object.assign(w11, { regular_price: '5500', date_modified_gmt: T2.slice(0, 19) });
-      Object.assign(c5, { name: 'Bomba CI', updatedAt: T2 });
-      Object.assign(w15, { name: 'Bomba web', date_modified_gmt: T2.slice(0, 19) });
-      await m.pasada();
-      m.peticiones.length = 0;
+      const m = await cargado();
+      m.estado.catalogo.abrirConflicto(
+        'SKU-001',
+        'precio',
+        { coreinbox: { valor: 6000, en: T2 }, woocommerce: { valor: 5500, en: T2 } },
+        T2,
+      );
+      m.estado.catalogo.abrirConflicto(
+        'SKU-005',
+        'nombre',
+        { coreinbox: { valor: 'Bomba CI', en: T2 }, woocommerce: { valor: 'Bomba web', en: T2 } },
+        T2,
+      );
+      recalcularTodo(m.estado.catalogo);
       const abiertos = m.estado.catalogo.conflictosAbiertos();
       expect(abiertos.length).toBeGreaterThanOrEqual(2);
       return { m, abiertos };
@@ -677,7 +835,7 @@ describe('acciones por formulario', () => {
     expect(pantalla.html).toContain('<strong>visibilidad</strong>');
     expect(pantalla.html).toContain('SKU-002 es un servicio: nunca va a la web');
     expect(pantalla.html).toContain('aplicada');
-    expect(pantalla.html).toContain('no se escribió en ningún sistema');
+    expect(pantalla.html).toContain('la siguiente pasada de escritura lo lleva a los sistemas');
 
     const hostil = new URLSearchParams([
       ['accion', 'visibilidad'],

@@ -104,6 +104,8 @@ export interface Aviso {
   accion: string;
   aplicadas: number;
   errores: string[];
+  /** El `id` de la fila desde la que se hizo, para repetir el aviso junto a ella. */
+  fila?: string;
 }
 
 export interface Marco {
@@ -208,6 +210,11 @@ function avisoHtml(a: Aviso): Html {
       está encendida.</span
     >
   </div>`;
+}
+
+/** El aviso de la acción, dibujado también junto a la fila `id` si la acción salió de ella. */
+export function avisoEnFila(a: Aviso | null | undefined, id: string): Html | '' {
+  return a && a.fila === id ? avisoHtml(a) : '';
 }
 
 export function pagina(m: Marco, cuerpo: Html): string {

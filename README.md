@@ -498,7 +498,10 @@ Las decisiones son formularios HTML que mandan `POST /panel/acciones/{reglas|emp
 y usan la misma lógica que la API JSON (`src/flujos/productos/acciones.ts`). No piden
 `CATALOGO_API_KEY`: el panel está detrás de Emite DTE, y la cabecera `X-Emite-Usuario` queda como
 usuario de la decisión. Tras aplicar, redirigen (303) a la pantalla de origen con el resultado
-(aplicadas y errores). Cada acción queda en la bitácora y aparece como evento `accion`.
+(aplicadas y errores). Cada acción queda en la bitácora y aparece como evento `accion`. Tras una
+acción se vuelve a la fila: cada fila con acciones lleva un `id` (`h-…` histórico, `c-…` conflicto,
+`p-…` producto, `k-…` categoría; un valor con otros caracteres va como hash corto), la redirección
+termina en `#<id>` (en un lote, el del primer marcado) y el aviso del resultado se repite en la fila.
 
 El panel responde con `Referrer-Policy: same-origin`: con `no-referrer` el navegador manda
 `Origin: null` en los envíos de formulario, y tanto el guardia de Emite DTE como el del panel los

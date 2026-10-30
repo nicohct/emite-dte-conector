@@ -16,7 +16,17 @@ import { CAMPOS_CATALOGO, CAMPOS_COMPARTIDOS, SISTEMAS_CATALOGO } from '../estad
 import type { NombreAccion } from '../flujos/productos/acciones.js';
 import { detalleDe } from '../flujos/productos/api.js';
 import { CAMPOS_ULTIMO_CAMBIO } from '../flujos/productos/canonico.js';
-import { cifra, enlaceExterno, fecha, html, paginas, type Html } from './html.js';
+import { ancla } from './formularios.js';
+import {
+  avisoEnFila,
+  cifra,
+  enlaceExterno,
+  fecha,
+  html,
+  paginas,
+  type Aviso,
+  type Html,
+} from './html.js';
 import { enlaceSku, etiquetaEstado } from './pantallas.js';
 
 export const NOMBRE_SISTEMA: Record<SistemaCatalogo, string> = {
@@ -239,6 +249,7 @@ export function pantallaProductos(
   registro: RegistroCatalogo,
   f: FiltroPanelCatalogo,
   base: string,
+  aviso: Aviso | null = null,
 ): Html {
   if (f.vista === 'sin_sku') return pantallaSinSku(registro, f, base);
   const { items, total } = registro.listar(f.filtro, f.pagina, f.porPagina);
@@ -250,11 +261,12 @@ export function pantallaProductos(
       Object.fromEntries(
         p.presentes.map((s) => [s, lecturas[s]?.campos[campo]?.valor ?? null]),
       ) as Partial<Record<SistemaCatalogo, ValorCampo>>;
-    return html`<tr>
+    const id = ancla('p', p.sku);
+    return html`<tr id="${id}">
       <td><input type="checkbox" name="sku" value="${p.sku}" aria-label="Elegir ${p.sku}" /></td>
       <td>${foto(base, p.sku, registro.fotos(p.sku).length > 0, 'chica')}</td>
       <td class="nowrap">
-        ${enlaceSku(p.sku, base)}
+        ${avisoEnFila(aviso, id)} ${enlaceSku(p.sku, base)}
         ${p.pendiente ? html`<br /><span class="etiqueta aviso" title="Alta o edición del panel que la pasada aún no escribe">pendiente</span>` : ''}
       </td>
       ${CAMPOS_COMPARTIDOS.map((c) => html`<td>${celdaCampo(p, c, valores(c))}</td>`)}
@@ -986,9 +998,11 @@ export function pantallaProducto(
 export function tablaConflicto(
   c: ReturnType<RegistroCatalogo['conflictos']>[number],
   base?: string,
+  aviso: Aviso | null = null,
 ): Html {
   const sistemas = SISTEMAS_CATALOGO.filter((s) => c.valores[s]);
-  return html`<tr>
+  const id = ancla('c', c.id);
+  return html`<tr id="${id}">
     ${
       base === undefined
         ? ''
@@ -1025,6 +1039,7 @@ export function tablaConflicto(
       }
     </td>
     <td>
+      ${avisoEnFila(aviso, id)}
       ${
         c.estado === 'abierto'
           ? html`<div class="botones">

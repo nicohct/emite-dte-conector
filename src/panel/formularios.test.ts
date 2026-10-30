@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { ErrorPeticion } from '../flujos/productos/acciones.js';
-import { avisoDe, cuerpoDe, destino, mismoOrigen } from './formularios.js';
+import { ancla, anclaDe, avisoDe, cuerpoDe, destino, mismoOrigen } from './formularios.js';
 
 const form = (...pares: Array<[string, string]>) => new URLSearchParams(pares);
 const req = (headers: Record<string, string | string[]>) => ({ headers }) as IncomingMessage;
@@ -145,7 +145,9 @@ describe('destino', () => {
     'productos/a\\b',
     '/productos',
     'desconocida',
-    'productos#frag',
+    'productos#a b',
+    'productos#fila/otra',
+    'historicos?estado=propuesto#h-1"',
     'javascript:alert(1)',
     'productosx',
   ])('un volver no válido (%j) cae en flujos', (volver) => {
@@ -377,5 +379,90 @@ describe('cuerpoDe: alta y edición', () => {
         campos: { precio: 'x' },
       },
     );
+  });
+});
+
+describe('volver a la fila', () => {
+  const ok = { aplicadas: 1, errores: [] };
+
+  it('destino conserva el fragmento de volver después de la consulta con el aviso', () => {
+    expect(destino('historicos?estado=propuesto&pagina=3#h-e1', 'empates', ok)).toBe(
+      'historicos?estado=propuesto&pagina=3&accion=empates&aplicadas=1&fila=h-e1#h-e1',
+    );
+    expect(destino('visibilidad#k_0123abcd', 'categorias', ok)).toBe(
+      'visibilidad?accion=categorias&aplicadas=1&fila=k_0123abcd#k_0123abcd',
+    );
+  });
+
+  it('sin fragmento en volver usa la fila de la decisión; el de volver manda', () => {
+    expect(destino('conflictos?pagina=2', 'conflictos', ok, 'c-7')).toBe(
+      'conflictos?pagina=2&accion=conflictos&aplicadas=1&fila=c-7#c-7',
+    );
+    expect(destino('historicos#h-a', 'empates', ok, 'h-b')).toBe(
+      'historicos?accion=empates&aplicadas=1&fila=h-a#h-a',
+    );
+    expect(destino('historicos?fila=h-viejo', 'empates', ok)).toBe(
+      'historicos?accion=empates&aplicadas=1',
+    );
+    expect(destino('historicos', 'empates', ok, 'h-<script>')).toBe(
+      'historicos?accion=empates&aplicadas=1',
+    );
+  });
+
+  it.each(['h-a b', 'h-a/b', 'h-ñ', 'h-a"', 'h-a#b', ''])(
+    'rechaza un fragmento con caracteres fuera de [A-Za-z0-9_-] (%j)',
+    (fragmento) => {
+      expect(destino(`historicos#${fragmento}`, 'empates', ok)).toBe(
+        'flujos?accion=empates&aplicadas=1',
+      );
+    },
+  );
+
+  it('ancla deja tal cual un valor seguro y resume el resto en un hash estable', () => {
+    expect(ancla('h', 'e-12_A')).toBe('h-e-12_A');
+    expect(ancla('c', 42)).toBe('c-42');
+    const raro = ancla('p', 'SKU 1/2"');
+    expect(raro).toMatch(/^p_[0-9a-f]{12}$/);
+    expect(ancla('p', 'SKU 1/2"')).toBe(raro);
+    expect(ancla('p', 'SKU 1/3"')).not.toBe(raro);
+  });
+
+  it('anclaDe toma la decisión `uno` o el primer elemento marcado del lote', () => {
+    expect(anclaDe('empates', form(['uno', JSON.stringify(['e1', 'SKU-1', 'confirmado'])]))).toBe(
+      'h-e1',
+    );
+    expect(
+      anclaDe(
+        'empates',
+        form(
+          ['sel', JSON.stringify(['e2', 'SKU-1'])],
+          ['sel', JSON.stringify(['e3', 'SKU-2'])],
+          ['estado', 'rechazado'],
+        ),
+      ),
+    ).toBe('h-e2');
+    expect(anclaDe('conflictos', form(['uno', JSON.stringify([5, 'coreinbox'])]))).toBe('c-5');
+    expect(anclaDe('conflictos', form(['sel', '8'], ['sel', '9'], ['fuente', 'emite']))).toBe(
+      'c-8',
+    );
+    expect(anclaDe('visibilidad', form(['uno', JSON.stringify(['SKU-3', 'aprobado'])]))).toBe(
+      'p-SKU-3',
+    );
+    expect(anclaDe('visibilidad', form(['sku', 'SKU-6'], ['sku', 'SKU-3']))).toBe('p-SKU-6');
+    expect(anclaDe('reglas', form(['lote', '1'], ['sku', 'SKU-5'], ['campo', 'precio']))).toBe(
+      'p-SKU-5',
+    );
+    expect(anclaDe('reglas', form(['campo', 'precio'], ['fuente', 'coreinbox']))).toBeNull();
+    expect(anclaDe('categorias', form(['categoria', 'Bombas'], ['fuera', '0']))).toBe('k-Bombas');
+    expect(anclaDe('alta', form(['sku', 'SKU-9']))).toBeNull();
+    expect(anclaDe('empates', form(['uno', 'no es json']))).toBeNull();
+    expect(anclaDe('empates', form(['estado', 'confirmado']))).toBeNull();
+  });
+
+  it('avisoDe lee la fila sólo si es un fragmento seguro', () => {
+    expect(avisoDe(new URLSearchParams('accion=empates&aplicadas=1&fila=h-e1'))?.fila).toBe('h-e1');
+    expect(
+      avisoDe(new URLSearchParams('accion=empates&aplicadas=1&fila=%3Cb%3E')),
+    ).not.toHaveProperty('fila');
   });
 });

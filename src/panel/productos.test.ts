@@ -13,6 +13,7 @@ import {
   type Mundo,
 } from '../prueba/catalogo.js';
 import { recalcularEmpates, recalcularTodo } from '../flujos/productos/lectura.js';
+import { ancla } from './formularios.js';
 import { crearPanel } from './index.js';
 
 const USUARIO = 'admin@example.com';
@@ -405,7 +406,8 @@ describe('pantallas del catálogo', () => {
         ],
         'visibilidad',
       );
-      expect(r.location).toBe('../visibilidad?accion=categorias&aplicadas=1');
+      const k = ancla('k', 'Válvulas');
+      expect(r.location).toBe(`../visibilidad?accion=categorias&aplicadas=1&fila=${k}#${k}`);
       expect(m.estado.catalogo.categoriasFuera()).toMatchObject([
         { categoria: 'Válvulas', usuario: USUARIO },
       ]);
@@ -612,7 +614,10 @@ describe('acciones por formulario', () => {
       ],
       'productos?q=Bomba',
     );
-    expect(lote.location).toBe('../productos?q=Bomba&accion=reglas&aplicadas=2');
+    // El lote vuelve a la fila del primer marcado.
+    expect(lote.location).toBe(
+      '../productos?q=Bomba&accion=reglas&aplicadas=2&fila=p-SKU-005#p-SKU-005',
+    );
     for (const sku of ['SKU-005', 'SKU-001']) {
       expect(m.estado.catalogo.reglas()).toContainEqual(
         expect.objectContaining({ ambito: sku, campo: 'precio', fuente: 'coreinbox' }),
@@ -674,7 +679,9 @@ describe('acciones por formulario', () => {
       ],
       'historicos',
     );
-    expect(lote.location).toBe('../historicos?accion=empates&aplicadas=2');
+    expect(lote.location).toBe(
+      `../historicos?accion=empates&aplicadas=2&fila=h-${b.emiteId}#h-${b.emiteId}`,
+    );
     for (const e of [b, c]) {
       expect(
         m.estado.catalogo.empatesDeHistorico(e.emiteId).find((x) => x.sku === e.sku),
@@ -719,7 +726,9 @@ describe('acciones por formulario', () => {
         [['uno', JSON.stringify([a.id, 'coreinbox'])]],
         'conflictos',
       );
-      expect(r.location).toBe('../conflictos?accion=conflictos&aplicadas=1');
+      expect(r.location).toBe(
+        `../conflictos?accion=conflictos&aplicadas=1&fila=c-${a.id}#c-${a.id}`,
+      );
       expect(m.estado.catalogo.conflicto(a.id)).toMatchObject({
         estado: 'resuelto',
         resueltoCon: 'coreinbox',
@@ -788,7 +797,9 @@ describe('acciones por formulario', () => {
       [['uno', JSON.stringify(['SKU-003', 'aprobado'])]],
       'productos/SKU-003',
     );
-    expect(uno.location).toBe('../productos/SKU-003?accion=visibilidad&aplicadas=1');
+    expect(uno.location).toBe(
+      '../productos/SKU-003?accion=visibilidad&aplicadas=1&fila=p-SKU-003#p-SKU-003',
+    );
     expect(m.estado.catalogo.producto('SKU-003')?.visibilidadWeb).toBe('aprobado');
 
     const lote = await aplicar(
@@ -801,7 +812,9 @@ describe('acciones por formulario', () => {
       ],
       'visibilidad',
     );
-    expect(lote.location).toBe('../visibilidad?accion=visibilidad&aplicadas=2');
+    expect(lote.location).toBe(
+      '../visibilidad?accion=visibilidad&aplicadas=2&fila=p-SKU-006#p-SKU-006',
+    );
     expect(m.estado.catalogo.producto('SKU-006')?.visibilidadWeb).toBe('rechazado');
     expect(m.estado.catalogo.producto('SKU-003')?.visibilidadWeb).toBe('rechazado');
 
@@ -1055,8 +1068,7 @@ describe('históricos: varios candidatos y empate manual', () => {
 
   /** El HTML de la fila del histórico con ese código. */
   const fila = (html: string, codigo: string) =>
-    html.split('<tr id="historico-').find((f) => f.includes(`<span class="id">${codigo}</span>`)) ??
-    '';
+    html.split('<tr id="h').find((f) => f.includes(`<span class="id">${codigo}</span>`)) ?? '';
 
   it('propone tres ordenados; rechazar el primero deja dos y la pasada siguiente completa tres', async () => {
     const m = await cargado(conMopas());
@@ -1124,7 +1136,7 @@ describe('históricos: varios candidatos y empate manual', () => {
     expect(fila(r.html, 'XX-9')).not.toContain('value="mopa"');
     // El buscador de la fila lleva el filtro (es un GET aparte, fuera del formulario del lote).
     expect(r.html).toMatch(
-      /<form id="buscar-\d+" method="get" action="\.\/historicos#historico-\d+">\s*<input type="hidden" name="estado" value="propuesto" \/>\s*<input type="hidden" name="para" value="eh-mopa" \/>/,
+      /<form\s+id="buscar-\d+"\s+method="get"\s+action="\.\/historicos#h-eh-mopa"\s*>\s*<input type="hidden" name="estado" value="propuesto" \/>\s*<input type="hidden" name="para" value="eh-mopa" \/>/,
     );
 
     const nada = await pagina(base, 'historicos?buscar=%25zzz_qq&para=eh-mopa');
@@ -1207,5 +1219,52 @@ describe('históricos: varios candidatos y empate manual', () => {
     );
     expect(rechazo.q.get('aplicadas')).toBe('2');
     expect(propuestas(m, 'eh-mopa').map((e) => e.sku)).not.toContain(a.sku);
+  });
+});
+
+describe('tras una acción se vuelve a la fila', () => {
+  it('históricos: cada fila con id, el POST vuelve a #h-… y el aviso se dibuja en esa fila', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const r = await pagina(base, 'historicos?estado=propuesto');
+    for (const h of m.estado.catalogo.historicos()) {
+      if (m.estado.catalogo.empatesDeHistorico(h.emiteId).some((e) => e.estado === 'propuesto')) {
+        expect(r.html).toContain(`<tr id="h-${h.emiteId}">`);
+      }
+    }
+    expect(r.html).toContain('name="volver" value="historicos?estado=propuesto"');
+
+    const [e] = m.estado.catalogo.empates('propuesto');
+    if (!e) throw new Error('fixture');
+    const accion = await enviar(base, 'empates', [
+      ['volver', 'historicos?pagina=1'],
+      ['uno', JSON.stringify([e.emiteId, e.sku, 'rechazado'])],
+    ]);
+    const location = accion.headers.get('location') ?? '';
+    expect(location).toBe(
+      `../historicos?pagina=1&accion=empates&aplicadas=1&fila=h-${e.emiteId}#h-${e.emiteId}`,
+    );
+
+    const vuelta = await pagina(base, location.slice(3).split('#')[0] ?? '');
+    const fila = vuelta.html.split(`<tr id="h-${e.emiteId}">`)[1]?.split('</tr>')[0] ?? '';
+    expect(fila).toContain('class="aviso-accion bien"');
+    // El de arriba se mantiene: dos avisos en la página, uno en la fila.
+    expect(vuelta.html.match(/class="aviso-accion bien"/g)).toHaveLength(2);
+  });
+
+  it('la búsqueda de canónico vuelve a la fila por el fragmento del action', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const r = await pagina(base, 'historicos');
+    expect(r.html).toMatch(/action="\.\/historicos#h-e1"/);
+  });
+
+  it('conflictos, visibilidad y productos ponen id en sus filas', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    expect((await pagina(base, 'visibilidad')).html).toMatch(/<tr id="p-SKU-00\d">/);
+    expect((await pagina(base, 'productos')).html).toContain('<tr id="p-SKU-001">');
+    const sku = 'SKU 1/2"';
+    expect(ancla('p', sku)).toMatch(/^p_[0-9a-f]{12}$/);
   });
 });

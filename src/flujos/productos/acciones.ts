@@ -192,9 +192,24 @@ export const ACCIONES: Record<NombreAccion, Accion> = {
     return r;
   },
 
-  /** `{ decisiones: [{ emiteId, sku, estado: 'confirmado' | 'rechazado' }] }`. */
+  /**
+   * `{ decisiones: [{ emiteId, sku, estado: 'confirmado' | 'rechazado' }] }`. Un lote que confirma
+   * dos SKU para el mismo histórico no aplica nada: sólo uno puede quedar.
+   */
   empates(registro, cuerpo, usuario, en) {
-    const r = porCada(lote(cuerpo, 'decisiones'), (d) => {
+    const decisiones = lote(cuerpo, 'decisiones');
+    const confirmados = decisiones
+      .filter(esObjeto)
+      .filter((d) => d.estado === 'confirmado')
+      .map((d) => d.emiteId);
+    const repetido = confirmados.find((id, i) => confirmados.indexOf(id) !== i);
+    if (repetido !== undefined) {
+      const codigo = typeof repetido === 'string' ? registro.historico(repetido)?.codigo : null;
+      throw new ErrorPeticion(
+        `el histórico ${codigo ?? String(repetido)} trae más de un candidato marcado para confirmar: marca uno solo (no se aplicó nada)`,
+      );
+    }
+    const r = porCada(decisiones, (d) => {
       if (!esObjeto(d)) throw new ErrorPeticion('se esperaba un objeto');
       const { emiteId, sku, estado } = d;
       if (typeof emiteId !== 'string' || !registro.historico(emiteId)) {

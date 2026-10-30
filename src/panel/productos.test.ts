@@ -3,8 +3,16 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Salud } from '../salud.js';
 import { crearServidor } from '../servidor.js';
-import { armar, AHORA, coreinbox, mundoInicial, T2, type Mundo } from '../prueba/catalogo.js';
-import { recalcularTodo } from '../flujos/productos/lectura.js';
+import {
+  armar,
+  AHORA,
+  coreinbox,
+  emite,
+  mundoInicial,
+  T2,
+  type Mundo,
+} from '../prueba/catalogo.js';
+import { recalcularEmpates, recalcularTodo } from '../flujos/productos/lectura.js';
 import { crearPanel } from './index.js';
 
 const USUARIO = 'admin@example.com';
@@ -1022,5 +1030,182 @@ describe('protección de los POST', () => {
     const pantalla = await fetch(destino);
     expect(pantalla.status).toBe(200);
     expect(await pantalla.text()).toContain('<strong>reglas</strong>');
+  });
+});
+
+describe('históricos: varios candidatos y empate manual', () => {
+  /** Un histórico con cuatro canónicos parecidos (y un SKU que contiene a otro) en Coreinbox. */
+  function conMopas(): Mundo {
+    const mundo = mundoInicial();
+    mundo.coreinbox.push(
+      coreinbox('c11', { sku: 'MOP-1', name: 'Mopa industrial algodón 60 cm', unitPrice: '8000' }),
+      coreinbox('c12', { sku: 'MOP-2', name: 'Mopa industrial algodón 80 cm' }),
+      coreinbox('c13', { sku: 'MOP-3', name: 'Mopa industrial algodon 40 cm' }),
+      coreinbox('c14', { sku: 'MOP-4', name: 'Mopa industrial microfibra 60 cm' }),
+      coreinbox('c15', { sku: 'AMOP-4X', name: 'Adaptador para MOP-4' }),
+    );
+    mundo.emite.push(
+      emite('eh-mopa', { codigo: 'MOPA-VIEJA', nombre: 'Mopa industrial algodon 60cm' }),
+    );
+    return mundo;
+  }
+
+  const propuestas = (m: Montaje, emiteId: string) =>
+    m.estado.catalogo.empatesDeHistorico(emiteId).filter((e) => e.estado === 'propuesto');
+
+  /** El HTML de la fila del histórico con ese código. */
+  const fila = (html: string, codigo: string) =>
+    html.split('<tr id="historico-').find((f) => f.includes(`<span class="id">${codigo}</span>`)) ??
+    '';
+
+  it('propone tres ordenados; rechazar el primero deja dos y la pasada siguiente completa tres', async () => {
+    const m = await cargado(conMopas());
+    const r = m.estado.catalogo;
+    const antes = propuestas(m, 'eh-mopa').sort((a, b) => b.puntaje - a.puntaje);
+    expect(antes).toHaveLength(3);
+    expect(antes[0]?.sku).toBe('MOP-1');
+
+    r.decidirEmpate('eh-mopa', 'MOP-1', 'rechazado', USUARIO, AHORA.toISOString());
+    expect(propuestas(m, 'eh-mopa').map((e) => e.sku)).toEqual(
+      antes
+        .slice(1)
+        .map((e) => e.sku)
+        .sort(),
+    );
+
+    recalcularEmpates(r, AHORA.toISOString());
+    const despues = propuestas(m, 'eh-mopa').map((e) => e.sku);
+    expect(despues).toHaveLength(3);
+    expect(despues).not.toContain('MOP-1');
+    expect(despues).toEqual(expect.arrayContaining(antes.slice(1).map((e) => e.sku)));
+  });
+
+  it('el resumen cuenta históricos con propuesta, no filas, y sin_candidato sigue igual', async () => {
+    const m = await cargado(conMopas());
+    const r = m.estado.catalogo;
+    const conPropuesta = r.historicos().filter((h) => propuestas(m, h.emiteId).length > 0);
+    const filas = r.empates('propuesto');
+    expect(filas.length).toBeGreaterThan(conPropuesta.length);
+    expect(r.resumen().empatesPropuestos).toBe(conPropuesta.length);
+
+    const base = await levantar(m);
+    const sin = await pagina(base, 'historicos?estado=sin_candidato');
+    expect(sin.html).toContain('<span class="id">ZZZ</span>');
+    expect(sin.html).not.toContain('<span class="id">MOPA-VIEJA</span>');
+  });
+
+  it('cada candidato trae su nombre canónico y sistemas; la pantalla avisa que confirmar es definitivo', async () => {
+    const m = await cargado(conMopas());
+    const base = await levantar(m);
+    const r = await pagina(base, 'historicos');
+    expect(r.html.replace(/\s+/g, ' ')).toContain(
+      'Confirmar un empate es definitivo cuando la escritura está encendida: fusiona el histórico en el canónico y no se deshace.',
+    );
+    const mopa = fila(r.html, 'MOPA-VIEJA');
+    expect(mopa).toContain('Mopa industrial algodón 60 cm');
+    expect(mopa).toMatch(/<span class="tenue">· Coreinbox<\/span>/);
+    expect(mopa.indexOf('productos/MOP-1')).toBeLessThan(mopa.indexOf('productos/MOP-3'));
+    expect(mopa.match(/name="sel"/g)).toHaveLength(3);
+    expect(mopa).toContain('Buscar canónico');
+  });
+
+  it('buscar=mopa&para=… muestra los resultados sólo en esa fila y conserva el filtro', async () => {
+    const m = await cargado(conMopas());
+    const base = await levantar(m);
+    const r = await pagina(base, 'historicos?estado=propuesto&buscar=mopa&para=eh-mopa');
+    expect(r.status).toBe(200);
+    const mopa = fila(r.html, 'MOPA-VIEJA');
+    const botones = mopa.match(/>Empatar con este</g) ?? [];
+    expect(botones.length).toBeGreaterThanOrEqual(4);
+    expect(botones.length).toBeLessThanOrEqual(10);
+    expect(mopa).toContain('value="mopa"');
+    expect(mopa).toContain('$ <span class="cifra">');
+    expect(r.html.match(/>Empatar con este</g)).toHaveLength(botones.length);
+    expect(fila(r.html, 'XX-9')).not.toContain('value="mopa"');
+    // El buscador de la fila lleva el filtro (es un GET aparte, fuera del formulario del lote).
+    expect(r.html).toMatch(
+      /<form id="buscar-\d+" method="get" action="\.\/historicos#historico-\d+">\s*<input type="hidden" name="estado" value="propuesto" \/>\s*<input type="hidden" name="para" value="eh-mopa" \/>/,
+    );
+
+    const nada = await pagina(base, 'historicos?buscar=%25zzz_qq&para=eh-mopa');
+    expect(fila(nada.html, 'MOPA-VIEJA')).toContain('Ningún canónico coincide con «%zzz_qq».');
+  });
+
+  it('un SKU exacto va primero y marcado', async () => {
+    const m = await cargado(conMopas());
+    const base = await levantar(m);
+    const r = await pagina(base, 'historicos?buscar=MOP-4&para=eh-mopa');
+    const resultados = fila(r.html, 'MOPA-VIEJA').split('<ul class="resultados"')[1] ?? '';
+    const skus = [...resultados.matchAll(/productos\/([^"]+)">/g)].map((x) => x[1]);
+    expect(skus).toEqual(['MOP-4', 'AMOP-4X']);
+    expect(resultados.match(/SKU exacto/g)).toHaveLength(1);
+    expect(resultados.indexOf('SKU exacto')).toBeLessThan(resultados.indexOf('AMOP-4X'));
+  });
+
+  it('«Empatar con este» confirma a mano, borra las propuestas y queda en Eventos', async () => {
+    const m = await cargado(conMopas());
+    const base = await levantar(m);
+    const r = await aplicar(
+      base,
+      'empates',
+      [['uno', JSON.stringify(['eh-mopa', 'SKU-005', 'confirmado'])]],
+      'historicos?estado=propuesto',
+    );
+    expect(r.q.get('aplicadas')).toBe('1');
+    expect(m.estado.catalogo.empatesDeHistorico('eh-mopa')).toEqual([
+      expect.objectContaining({
+        sku: 'SKU-005',
+        estado: 'confirmado',
+        motivo: 'manual',
+        detalle: 'elegido a mano en el panel',
+        decididoPor: USUARIO,
+      }),
+    ]);
+    expect(eventosDe(m, 'empates')).toHaveLength(1);
+    expect(m.estado.eventos().some((e) => e.tipo === 'empate' && e.estado === 'confirmado')).toBe(
+      true,
+    );
+    const eventos = await pagina(base, 'eventos');
+    expect(eventos.status).toBe(200);
+    expect(eventos.html).toContain('empates');
+
+    const despues = await pagina(base, 'historicos?buscar=mopa&para=eh-mopa');
+    expect(fila(despues.html, 'MOPA-VIEJA')).not.toContain('Buscar canónico');
+  });
+
+  it('un lote que confirma dos candidatos del mismo histórico no aplica nada', async () => {
+    const m = await cargado(conMopas());
+    const base = await levantar(m);
+    const [a, b] = propuestas(m, 'eh-mopa');
+    if (!a || !b) throw new Error('fixture');
+    const r = await aplicar(
+      base,
+      'empates',
+      [
+        ['sel', JSON.stringify([a.emiteId, a.sku])],
+        ['sel', JSON.stringify([b.emiteId, b.sku])],
+        ['estado', 'confirmado'],
+      ],
+      'historicos',
+    );
+    expect(r.q.get('aplicadas')).toBe('0');
+    expect(r.q.getAll('error')).toEqual([
+      'el histórico MOPA-VIEJA trae más de un candidato marcado para confirmar: marca uno solo (no se aplicó nada)',
+    ]);
+    expect(propuestas(m, 'eh-mopa')).toHaveLength(3);
+
+    // Rechazar dos del mismo histórico sí se puede: vienen los siguientes.
+    const rechazo = await aplicar(
+      base,
+      'empates',
+      [
+        ['sel', JSON.stringify([a.emiteId, a.sku])],
+        ['sel', JSON.stringify([b.emiteId, b.sku])],
+        ['estado', 'rechazado'],
+      ],
+      'historicos',
+    );
+    expect(rechazo.q.get('aplicadas')).toBe('2');
+    expect(propuestas(m, 'eh-mopa').map((e) => e.sku)).not.toContain(a.sku);
   });
 });

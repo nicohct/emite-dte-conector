@@ -1,6 +1,6 @@
 /**
  * Propuesta pura de empate entre un producto histórico de Emite DTE y un SKU canónico (Coreinbox y
- * web). Sin red ni disco: sólo propone el mejor candidato con puntaje y motivo; decidir es de una
+ * web). Sin red ni disco: sólo propone los mejores candidatos con puntaje y motivo; decidir es de una
  * persona.
  */
 
@@ -124,96 +124,95 @@ export function indexarCanonicos(canonicos: Canonico[]): IndiceCanonicos {
   return { skus, porCodigoNormalizado, porNombre, nombres };
 }
 
-function elegir(
-  skus: readonly string[] | undefined,
-  rechazados: ReadonlySet<string>,
-): { sku: string; otros: string[] } | null {
-  const validos = (skus ?? []).filter((sku) => !rechazados.has(sku));
-  const [sku, ...otros] = validos;
-  return sku === undefined ? null : { sku, otros };
-}
-
-function tambien(otros: string[]): string {
-  return otros.length > 0 ? ` (también: ${otros.join(', ')})` : '';
-}
+/** Cuántos candidatos se proponen como mucho por histórico. */
+export const MAX_CANDIDATOS = 3;
 
 /**
- * El mejor canónico para un histórico, o `null`. Precedencia: código exacto, alias, código
- * normalizado, nombre normalizado y nombre parecido. Los SKU de `rechazados` nunca se proponen.
+ * Los mejores canónicos para un histórico, mejor primero, hasta `MAX_CANDIDATOS` y sin repetir SKU.
+ * Precedencia: código exacto, alias, código normalizado, nombre normalizado y nombre parecido (sobre
+ * `UMBRAL_PARECIDO`). Los SKU de `rechazados` nunca se proponen.
  */
 export function proponerEmpate(
   historico: Historico,
   indice: IndiceCanonicos,
   opciones: { aliasDe?: string | null; rechazados?: ReadonlySet<string> } = {},
-): Candidato | null {
+): Candidato[] {
   const rechazados = opciones.rechazados ?? new Set<string>();
+  const candidatos: Candidato[] = [];
+  const lleno = () => candidatos.length >= MAX_CANDIDATOS;
+  const sumar = (c: Candidato): void => {
+    if (lleno() || c.sku === '' || rechazados.has(c.sku)) return;
+    if (candidatos.some((x) => x.sku === c.sku)) return;
+    candidatos.push(c);
+  };
   const codigo = historico.codigo.trim();
 
-  if (codigo !== '' && indice.skus.has(codigo) && !rechazados.has(codigo)) {
-    return {
+  if (codigo !== '' && indice.skus.has(codigo)) {
+    sumar({
       sku: codigo,
       puntaje: PUNTAJE_CODIGO,
       motivo: 'codigo',
       detalle: 'el código del histórico es el SKU',
-    };
+    });
   }
 
   const alias = opciones.aliasDe;
-  if (alias !== undefined && alias !== null && alias !== '' && !rechazados.has(alias)) {
-    return {
+  if (alias !== undefined && alias !== null) {
+    sumar({
       sku: alias,
       puntaje: PUNTAJE_ALIAS,
       motivo: 'alias',
       detalle: 'Emite DTE resuelve el SKU como alias de este histórico',
-    };
+    });
   }
 
   const codigoNormalizado = normalizarTexto(codigo).replaceAll(' ', '');
   if (codigoNormalizado !== '') {
-    const elegido = elegir(indice.porCodigoNormalizado.get(codigoNormalizado), rechazados);
-    if (elegido !== null) {
-      return {
-        sku: elegido.sku,
+    for (const sku of indice.porCodigoNormalizado.get(codigoNormalizado) ?? []) {
+      sumar({
+        sku,
         puntaje: PUNTAJE_CODIGO_NORMALIZADO,
         motivo: 'codigo_normalizado',
-        detalle: `mismo código sin signos ni mayúsculas${tambien(elegido.otros)}`,
-      };
+        detalle: 'mismo código sin signos ni mayúsculas',
+      });
     }
   }
 
   const nombre = normalizarTexto(historico.nombre);
-  if (nombre === '') return null;
+  if (nombre === '' || lleno()) return candidatos;
 
-  const porNombre = elegir(indice.porNombre.get(nombre), rechazados);
-  if (porNombre !== null) {
-    return {
-      sku: porNombre.sku,
+  for (const sku of indice.porNombre.get(nombre) ?? []) {
+    sumar({
+      sku,
       puntaje: PUNTAJE_NOMBRE,
       motivo: 'nombre',
-      detalle: `mismo nombre normalizado: "${nombre}"${tambien(porNombre.otros)}`,
-    };
+      detalle: `mismo nombre normalizado: "${nombre}"`,
+    });
   }
+  if (lleno()) return candidatos;
 
+  // El mejor nombre de cada SKU sobre el umbral; después, por parecido y SKU.
   const { mapa, total } = bigramasDe(nombre);
-  let mejor: { sku: string; valor: number; original: string } | null = null;
+  const mejores = new Map<string, { valor: number; original: string }>();
   for (const candidato of indice.nombres) {
     if (rechazados.has(candidato.sku)) continue;
     const valor = dice(mapa, total, candidato.mapa, candidato.total);
     if (valor < UMBRAL_PARECIDO) continue;
-    if (
-      mejor === null ||
-      valor > mejor.valor ||
-      (valor === mejor.valor && candidato.sku.localeCompare(mejor.sku) < 0)
-    ) {
-      mejor = { sku: candidato.sku, valor, original: candidato.original };
+    const previo = mejores.get(candidato.sku);
+    if (previo === undefined || valor > previo.valor) {
+      mejores.set(candidato.sku, { valor, original: candidato.original });
     }
   }
-  if (mejor === null) return null;
-
-  return {
-    sku: mejor.sku,
-    puntaje: Math.round(FACTOR_PARECIDO * mejor.valor * 1000) / 1000,
-    motivo: 'parecido',
-    detalle: `nombre parecido (${mejor.valor.toFixed(2)}) a "${mejor.original}"`,
-  };
+  const parecidos = [...mejores].sort(
+    ([skuA, a], [skuB, b]) => b.valor - a.valor || porSku(skuA, skuB),
+  );
+  for (const [sku, { valor, original }] of parecidos) {
+    sumar({
+      sku,
+      puntaje: Math.round(FACTOR_PARECIDO * valor * 1000) / 1000,
+      motivo: 'parecido',
+      detalle: `nombre parecido (${valor.toFixed(2)}) a "${original}"`,
+    });
+  }
+  return candidatos;
 }

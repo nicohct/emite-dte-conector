@@ -164,11 +164,13 @@ los conflictos, los empates y el índice.
   valores distintos (en un campo con propietario gana el propietario). Queda abierto, con los valores
   y la hora de cada lado, hasta que alguien elija; mientras tanto ese campo no se escribe. Antes de la
   primera escritura no se abren conflictos.
-- **Empates.** Para cada histórico se propone el mejor SKU, según el criterio que lo encontró: código
-  exacto (1); alias que resuelve `por-codigo` (0,95); código sin signos ni mayúsculas (0,9); nombre
-  normalizado igual (0,85); nombre parecido (0,8 × similitud, desde 0,6). Cada propuesta sale junto con
-  el `uso` del histórico (documentos y última venta). Un empate rechazado no se vuelve a proponer.
-  Confirmar es una decisión; la escritura lo lleva a Emite DTE (adoptar o fusionar).
+- **Empates.** Para cada histórico se proponen hasta tres SKU distintos, el mejor primero, según el
+  criterio que los encontró: código exacto (1); alias que resuelve `por-codigo` (0,95); código sin
+  signos ni mayúsculas (0,9); nombre normalizado igual (0,85); nombre parecido (0,8 × similitud, desde
+  0,6). Cada propuesta sale junto con el `uso` del histórico (documentos y última venta). Un empate
+  rechazado no se vuelve a proponer y su lugar lo toma el siguiente sobre el umbral. Confirmar uno
+  retira las demás propuestas del histórico; es una decisión y la escritura la lleva a Emite DTE
+  (adoptar o fusionar).
 - **Índice de información.** Por SKU y sistema, enlaces con URL y hash SHA-256 de lo leído. Imágenes y
   documentos no se descargan:
   - Coreinbox: producto e imagen, y categoría.
@@ -435,7 +437,7 @@ Los booleanos aceptan `true`, `1`, `si` o `sí`, y `false`, `0` o `no`. Otro val
 }
 ```
 
-`flujos.productos.catalogo` trae `skus`, `leidos` por sistema (`coreinbox`, `woocommerce`, `emite`, con los históricos y los sin SKU), `historicos`, `conDiferencias`, `enConflicto`, `empatesPropuestos` y `sinSku`.
+`flujos.productos.catalogo` trae `skus`, `leidos` por sistema (`coreinbox`, `woocommerce`, `emite`, con los históricos y los sin SKU), `historicos`, `conDiferencias`, `enConflicto`, `empatesPropuestos` (históricos con alguna propuesta, no filas) y `sinSku`.
 
 Las claves de primer nivel (`ok`, `creadas`, `conError`, `productos`) se mantienen por compatibilidad.
 `ultimaPasada` y `ultimaFalla` viven en memoria y se pierden al reiniciar. `ultimaFalla` trae sólo
@@ -472,8 +474,15 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
 - **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno,
   reglas que le aplican, conflictos, empates con su histórico, lo que se escribirá, las últimas
   escrituras, índice de enlaces (cada URL abre el sistema en otra pestaña) y la foto principal.
-- **Históricos** (`/panel/historicos`): los productos históricos de Emite DTE con su uso y su
-  empate (puntaje, motivo); confirmar o rechazar uno a uno o en lote. Filtro
+- **Históricos** (`/panel/historicos`): los productos históricos de Emite DTE con su uso y hasta
+  tres candidatos, el mejor primero; de cada uno, el puntaje, el motivo, el nombre canónico y en qué
+  sistemas está. Confirmar o rechazar uno a uno o en lote; rechazar un candidato trae el siguiente
+  sobre el umbral, y un lote que confirma dos candidatos del mismo histórico no aplica nada. Si
+  ninguno es el producto, **Buscar canónico** (código o nombre) recarga la pantalla con
+  `?buscar=…&para={emiteId}` (conserva filtro y página) y muestra en esa fila hasta diez canónicos
+  de la misma búsqueda de la lista, con el SKU exacto primero y marcado; **Empatar con este** lo
+  confirma a mano (motivo `manual`) y retira las propuestas. Un aviso fijo recuerda que, con la
+  escritura encendida, confirmar fusiona el histórico en el canónico y no se deshace. Filtro
   `?estado=propuesto|confirmado|rechazado|sin_candidato`.
 - **Conflictos** (`/panel/conflictos`): los abiertos de todo el catálogo; «quedarse con el de la
   web / Coreinbox / Emite DTE», uno a uno o en lote.

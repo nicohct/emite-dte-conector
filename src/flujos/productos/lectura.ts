@@ -371,7 +371,7 @@ export function recalcularTodo(registro: RegistroCatalogo): void {
 }
 
 /**
- * Vuelve a proponer el mejor SKU para cada histórico sin fusionar ni confirmar. Las decisiones
+ * Vuelve a proponer los mejores SKU (hasta tres) para cada histórico sin fusionar ni confirmar. Las decisiones
  * (confirmados, rechazados) se respetan: un SKU rechazado nunca vuelve a proponerse para ese
  * histórico.
  */
@@ -383,28 +383,29 @@ export function recalcularEmpates(registro: RegistroCatalogo, en: string): void 
     for (const h of registro.historicos()) {
       const decididos = registro.empatesDeHistorico(h.emiteId);
       if (h.fusionadoEnId || decididos.some((e) => e.estado === 'confirmado')) {
-        registro.proponerEmpate(h.emiteId, null, en);
+        registro.proponerEmpate(h.emiteId, [], en);
         continue;
       }
       const rechazados = new Set(
         decididos.filter((e) => e.estado === 'rechazado').map((e) => e.sku),
       );
-      const candidato = proponerEmpate(
+      const candidatos = proponerEmpate(
         { emiteId: h.emiteId, codigo: h.codigo, nombre: h.nombre },
         indice,
         { aliasDe: h.aliasSku, rechazados },
       );
-      const vigente = decididos.find((e) => e.estado === 'propuesto');
+      const vigentes = decididos.filter((e) => e.estado === 'propuesto');
       if (
-        vigente &&
-        candidato &&
-        vigente.sku === candidato.sku &&
-        vigente.puntaje === candidato.puntaje &&
-        vigente.detalle === candidato.detalle
+        vigentes.length === candidatos.length &&
+        candidatos.every((c) =>
+          vigentes.some(
+            (v) => v.sku === c.sku && v.puntaje === c.puntaje && v.detalle === c.detalle,
+          ),
+        )
       ) {
         continue;
       }
-      registro.proponerEmpate(h.emiteId, candidato, en);
+      registro.proponerEmpate(h.emiteId, candidatos, en);
     }
   });
 }

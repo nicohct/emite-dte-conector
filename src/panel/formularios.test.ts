@@ -248,6 +248,10 @@ describe('mismoOrigen', () => {
     expect(mismoOrigen(req({ origin: `http://${host}` }))).toBe(false);
   });
 
+  it('Origin "null" (lo que manda el navegador con referrer-policy no-referrer) falla', () => {
+    expect(mismoOrigen(req({ host, origin: 'null', 'sec-fetch-site': 'same-origin' }))).toBe(false);
+  });
+
   it('Sec-Fetch-Site cross-site falla aunque el Origin coincida', () => {
     expect(
       mismoOrigen(req({ host, origin: `http://${host}`, 'sec-fetch-site': 'cross-site' })),

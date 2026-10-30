@@ -289,7 +289,7 @@ function leerCuerpo(req: IncomingMessage): Promise<string | null> {
 
 const SEGURIDAD = {
   'x-content-type-options': 'nosniff',
-  'referrer-policy': 'no-referrer',
+  'referrer-policy': 'same-origin',
 };
 
 function enviar(

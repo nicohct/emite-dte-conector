@@ -156,8 +156,8 @@ describe('pantallas del catálogo', () => {
       'SKU-006',
     ]);
     expect(await filas('diferencias=1')).toEqual(['SKU-005']);
-    // SKU-006 es un borrador en la web: lo que está en la web ya está aprobado.
-    expect(await filas('propuesto_web=1')).toEqual(['SKU-003']);
+    // SKU-006 es un borrador en la web: sin decisión sigue propuesto (sólo lo publicado se aprueba).
+    expect(await filas('propuesto_web=1')).toEqual(['SKU-003', 'SKU-006']);
     expect(await filas('historicos=1')).toEqual(['SKU-001', 'SKU-002', 'SKU-003', 'SKU-005']);
     expect(await filas('sin_sku=1')).toEqual(['SKU-002', 'SKU-003', 'SKU-005', 'SKU-006']);
     expect(await filas('conflicto=1')).toEqual([]);
@@ -348,15 +348,15 @@ describe('pantallas del catálogo', () => {
     expect((await pagina(base, 'productos?conflicto=1')).html).toContain('SKU-001');
   });
 
-  it('visibilidad: sólo SKU-003 propuesto (SKU-006 ya está en la web), con foto en hueco', async () => {
+  it('visibilidad: SKU-003 y SKU-006 propuestos (el borrador de la web no se aprueba solo), con foto en hueco', async () => {
     const base = await levantar(await cargado());
     const r = await pagina(base, 'visibilidad');
     expect(r.status).toBe(200);
     const tabla = r.html.slice(0, r.html.indexOf('Categorías fuera de la web'));
-    expect(skusDeFilas(tabla)).toEqual(['SKU-003']);
+    expect(skusDeFilas(tabla)).toEqual(['SKU-003', 'SKU-006']);
     expect(r.html).toContain('Repuesto sello');
     expect(r.html).not.toContain('<img');
-    expect(r.html).not.toContain('Llave de paso');
+    expect(r.html).toContain('Llave de paso');
     expect(r.html).toContain(
       '<button type="submit" name="estado" value="aprobado">Aprobar</button>',
     );
@@ -365,7 +365,8 @@ describe('pantallas del catálogo', () => {
     expect(r.html).toContain('sin decisión');
 
     const web = await pagina(base, 'productos/SKU-006');
-    expect(web.html).toContain('ya está en la web');
+    expect(web.html).toContain('sin decisión');
+    expect(web.html).not.toContain('ya está en la web');
   });
 
   describe('categorías fuera de la web', () => {
@@ -403,18 +404,21 @@ describe('pantallas del catálogo', () => {
       expect(eventosDe(m, 'categorias')).toMatchObject([{ mensaje: USUARIO }]);
       expect(m.peticiones).toEqual([]);
 
-      // Sin decisión por SKU, la categoría pesa más que estar en la web (SKU-001).
+      // Sin decisión por SKU la categoría rechaza (SKU-003); SKU-001 ya fue aprobado por la web y no cambia.
       expect(m.estado.catalogo.producto('SKU-003')).toMatchObject({
         visibilidadWeb: 'rechazado',
         motivoVisibilidad: 'categoria',
       });
-      expect(m.estado.catalogo.producto('SKU-001')?.motivoVisibilidad).toBe('categoria');
+      expect(m.estado.catalogo.producto('SKU-001')).toMatchObject({
+        visibilidadWeb: 'aprobado',
+        motivoVisibilidad: 'decision',
+      });
       const despues = await pagina(base, 'visibilidad');
       expect(despues.html).toMatch(/<td>Válvulas<\/td>/);
       expect(despues.html).toContain('Volver a la web');
       expect(despues.html).not.toMatch(/<input type="checkbox" name="categoria"/);
       const rechazados = despues.html.slice(despues.html.indexOf('Rechazados por su categoría'));
-      expect(skusDeFilas(rechazados)).toEqual(['SKU-001', 'SKU-003']);
+      expect(skusDeFilas(rechazados)).toEqual(['SKU-003']);
 
       // Aprobar el SKU por la pantalla usa la acción de visibilidad.
       const aprobado = await aplicar(
@@ -426,9 +430,9 @@ describe('pantallas del catálogo', () => {
       expect(aprobado.q.get('aplicadas')).toBe('1');
       expect(m.estado.catalogo.producto('SKU-003')?.visibilidadWeb).toBe('aprobado');
       const sin = await pagina(base, 'visibilidad');
-      expect(skusDeFilas(sin.html.slice(sin.html.indexOf('Rechazados por su categoría')))).toEqual([
-        'SKU-001',
-      ]);
+      expect(skusDeFilas(sin.html.slice(sin.html.indexOf('Rechazados por su categoría')))).toEqual(
+        [],
+      );
 
       const vuelve = await aplicar(
         base,

@@ -243,9 +243,9 @@ export function pantallaVisibilidad(
   const volver = `visibilidad${conPagina(new URLSearchParams(), n)}`;
   return html`<h1>Visibilidad web</h1>
     <p class="tenue">
-      Productos que no están en la web y se proponen para publicarse. Un servicio no se ofrece en la
-      web, y lo que ya está en la web queda aprobado. Aprobar o rechazar lo anota; la siguiente
-      pasada de escritura lo lleva a la web, si está encendida.
+      Productos sin decisión que se proponen para la web, incluidos los borradores de la tienda. Un
+      servicio no se ofrece, y lo publicado en la web queda aprobado por «web». Aprobar o rechazar
+      lo anota; la siguiente pasada de escritura lo lleva a la web, si está encendida.
     </p>
     ${
       items.length

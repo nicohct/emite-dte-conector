@@ -130,11 +130,11 @@ describe('pasada de lectura del catálogo', () => {
       empates: [{ emiteId: 'e4', motivo: 'alias' }],
     });
 
-    // Sólo en la web y en borrador: estar en la tienda basta para quedar aprobado.
+    // Sólo en la web y en borrador: estar en la tienda no lo aprueba, sigue propuesto.
     expect(detalleDe(registro, 'SKU-006')).toMatchObject({
       presentes: ['woocommerce'],
-      visibilidadWeb: 'aprobado',
-      motivoVisibilidad: 'en_web',
+      visibilidadWeb: 'propuesto',
+      motivoVisibilidad: 'sin_decision',
       faltaEn: ['coreinbox', 'emite'],
     });
 
@@ -362,7 +362,7 @@ describe('API del catálogo', () => {
       ((await pedir(`/catalogo?${q}`)).cuerpo.items as Array<{ sku: string }>).map((p) => p.sku);
     expect(await skus('diferencias=true')).toEqual(['SKU-005']);
     expect(await skus('sin_sku=true')).toEqual(['SKU-002', 'SKU-003', 'SKU-005', 'SKU-006']);
-    expect(await skus('propuesto_web=true')).toEqual(['SKU-003']);
+    expect(await skus('propuesto_web=true')).toEqual(['SKU-003', 'SKU-006']);
     expect(await skus('historicos=true')).toEqual(['SKU-001', 'SKU-002', 'SKU-003', 'SKU-005']);
     expect(await skus('conflicto=true')).toEqual([]);
     expect(await skus('q=Bomba')).toEqual(['SKU-005']);

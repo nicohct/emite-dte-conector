@@ -162,6 +162,7 @@ export async function pasadaLectura(d: DependenciasLectura): Promise<ResultadoLe
         }
         const { lectura, indice } = desdeWoo(d.woocommerce, p, sku, modificado, leidoEn);
         guardar(lectura, indice);
+        aprobarPublicado(registro, sku, p.status, leidoEn);
       }
       if (ultima) registro.guardarCursor('woocommerce', restar(ultima));
     }
@@ -258,6 +259,26 @@ export async function pasadaLectura(d: DependenciasLectura): Promise<ResultadoLe
   r.empatesPropuestos = resumen.empatesPropuestos;
   r.conDiferencias = resumen.conDiferencias;
   return r;
+}
+
+/** Usuario con que queda la aprobación de lo que ya estaba publicado en la web. */
+export const USUARIO_WEB = 'web';
+
+/**
+ * Lo publicado en la web arranca aprobado: si la pasada lo ve con `status: publish` y sin decisión
+ * de visibilidad, la registra (`aprobado`, usuario `web`). Queda como una aprobación explícita más:
+ * una categoría fuera de la web no lo toca y, si después alguien lo pasa a borrador, se revierte. Un
+ * servicio no se aprueba (nunca va a la web).
+ */
+function aprobarPublicado(
+  registro: RegistroCatalogo,
+  sku: string,
+  estado: string,
+  en: string,
+): void {
+  if (estado !== 'publish' || registro.visibilidadDecidida(sku)) return;
+  if (registro.lecturas(sku).coreinbox?.campos.tipo?.valor === 'servicio') return;
+  registro.decidirVisibilidad(sku, { estado: 'aprobado', usuario: USUARIO_WEB, en });
 }
 
 /** Recalcula el producto canónico de un SKU; si ya no queda ninguna lectura, lo quita. */

@@ -341,7 +341,7 @@ describe('calcularProducto: visibilidad web y alcance', () => {
     expect(avisosSobre(p, /servicio/i)).toHaveLength(1);
   });
 
-  it('un bien publicado en la web queda aprobado y la web entra al alcance', () => {
+  it('un bien publicado en la web sin decisión queda propuesto: la lectura no aprueba', () => {
     const p = calcularProducto(
       entrada({
         lecturas: {
@@ -350,7 +350,22 @@ describe('calcularProducto: visibilidad web y alcance', () => {
         },
       }),
     );
+    expect(p.visibilidadWeb).toBe('propuesto');
+    expect(p.motivoVisibilidad).toBe('sin_decision');
+  });
+
+  it('un bien en la web con decisión aprobada entra la web al alcance', () => {
+    const p = calcularProducto(
+      entrada({
+        lecturas: {
+          coreinbox: lectura('coreinbox', { tipo: 'bien' }),
+          woocommerce: lectura('woocommerce', { activo: true }),
+        },
+        visibilidad: { estado: 'aprobado', usuario: 'web', en: EN },
+      }),
+    );
     expect(p.visibilidadWeb).toBe('aprobado');
+    expect(p.motivoVisibilidad).toBe('decision');
     expect(p.alcance).toEqual(['coreinbox', 'woocommerce', 'emite']);
   });
 
@@ -363,7 +378,7 @@ describe('calcularProducto: visibilidad web y alcance', () => {
     expect(p.alcance).toEqual(['coreinbox', 'emite']);
   });
 
-  it('un bien en la web aunque sea borrador queda aprobado: está en la tienda', () => {
+  it('un bien en la web como borrador sin decisión queda propuesto', () => {
     const p = calcularProducto(
       entrada({
         lecturas: {
@@ -372,8 +387,8 @@ describe('calcularProducto: visibilidad web y alcance', () => {
         },
       }),
     );
-    expect(p.visibilidadWeb).toBe('aprobado');
-    expect(p.motivoVisibilidad).toBe('en_web');
+    expect(p.visibilidadWeb).toBe('propuesto');
+    expect(p.motivoVisibilidad).toBe('sin_decision');
   });
 
   it('una decisión rechazada manda sobre lo publicado y avisa', () => {
@@ -670,6 +685,7 @@ describe('calcularProducto: categorías fuera de la web', () => {
 
 describe('calcularProducto: escrituras planeadas', () => {
   const extraCi = { moneda: 'CLP' };
+  const aprobado = decision('aprobado');
   const base = () => ({
     coreinbox: lectura(
       'coreinbox',
@@ -691,7 +707,7 @@ describe('calcularProducto: escrituras planeadas', () => {
   });
 
   it('lista sólo los campos que difieren del canónico', () => {
-    const p = calcularProducto(entrada({ lecturas: base() }));
+    const p = calcularProducto(entrada({ lecturas: base(), visibilidad: aprobado }));
     expect(p.escrituras).toEqual([
       { sistema: 'coreinbox', campo: 'nombre', antes: 'Viejo', valor: 'Nuevo', revierte: false },
       { sistema: 'coreinbox', campo: 'precio', antes: 4000, valor: 5000, revierte: false },
@@ -705,12 +721,16 @@ describe('calcularProducto: escrituras planeadas', () => {
       { nombre: 'Nuevo', precio: 5000, activo: true, tipo: 'bien', categoria: 'C' },
       { extra: extraCi },
     );
-    expect(calcularProducto(entrada({ lecturas })).escrituras).toEqual([]);
+    expect(calcularProducto(entrada({ lecturas, visibilidad: aprobado })).escrituras).toEqual([]);
   });
 
   it('salta los campos en conflicto', () => {
     const p = calcularProducto(
-      entrada({ lecturas: base(), conflictosAbiertos: [conflicto('precio')] }),
+      entrada({
+        lecturas: base(),
+        visibilidad: aprobado,
+        conflictosAbiertos: [conflicto('precio')],
+      }),
     );
     expect(p.escrituras.map((x) => x.campo)).toEqual(['nombre']);
   });
@@ -722,7 +742,7 @@ describe('calcularProducto: escrituras planeadas', () => {
       { nombre: 'Nuevo', precio: 4000, activo: true, tipo: 'bien', categoria: 'C' },
       { extra: { moneda: 'USD' } },
     );
-    expect(calcularProducto(entrada({ lecturas })).escrituras).toEqual([]);
+    expect(calcularProducto(entrada({ lecturas, visibilidad: aprobado })).escrituras).toEqual([]);
   });
 
   it('marca revierte cuando el sistema cambió, no es la fuente y ya hubo primera escritura', () => {
@@ -756,7 +776,7 @@ describe('calcularProducto: escrituras planeadas', () => {
       { nombre: 'Nuevo', precio: 5000, activo: false },
       { extra: { estado: 'draft' } },
     );
-    const p = calcularProducto(entrada({ lecturas }));
+    const p = calcularProducto(entrada({ lecturas, visibilidad: aprobado }));
     expect(p.visibilidadWeb).toBe('aprobado');
     expect(p.escrituras.find((x) => x.sistema === 'woocommerce')).toEqual({
       sistema: 'woocommerce',
@@ -777,7 +797,7 @@ describe('calcularProducto: escrituras planeadas', () => {
   });
 
   it('un producto aprobado ya publicado no escribe activo en la web', () => {
-    const p = calcularProducto(entrada({ lecturas: base() }));
+    const p = calcularProducto(entrada({ lecturas: base(), visibilidad: aprobado }));
     expect(p.escrituras.some((x) => x.sistema === 'woocommerce')).toBe(false);
   });
 });

@@ -436,8 +436,58 @@ describe('visibilidad web', () => {
       AHORA.toISOString(),
     );
 
-  it('un SKU de una categoría fuera de la web queda rechazado y pasa a borrador; aprobarlo lo publica', async () => {
+  it('lo publicado en la web queda aprobado por «web» y una categoría fuera de la web no lo toca', async () => {
     const m = await escrito();
+    expect(m.estado.catalogo.visibilidadDecidida('SKU-001')).toMatchObject({
+      estado: 'aprobado',
+      usuario: 'web',
+    });
+    categorias(m.estado, true);
+    expect(m.estado.catalogo.producto('SKU-001')).toMatchObject({
+      visibilidadWeb: 'aprobado',
+      motivoVisibilidad: 'decision',
+    });
+    const marca = m.escrituras.length;
+    await m.pasada();
+    expect(web(m.mundo, 11).status).toBe('publish');
+    expect(desde(m.escrituras, marca)).toEqual([]);
+  });
+
+  it('publicado y aprobado, pasarlo a borrador en la web se revierte', async () => {
+    const m = await escrito();
+    aMano.web(m.mundo, 11, { status: 'draft' });
+    const r = await m.pasada();
+    expect(r.revertidos).toBe(1);
+    expect(web(m.mundo, 11).status).toBe('publish');
+    // La decisión de «web» sigue: un borrador posterior no la cambia.
+    expect(m.estado.catalogo.visibilidadDecidida('SKU-001')?.usuario).toBe('web');
+  });
+
+  it('un borrador en la tienda sin decisión no se publica aunque Coreinbox lo tenga activo', async () => {
+    const mundo = mundoInicial();
+    const valvula = mundo.woo.find((w) => w.id === 11);
+    if (valvula) valvula.status = 'draft';
+    const m = await escrito(mundo);
+    expect(m.estado.catalogo.visibilidadDecidida('SKU-001')).toBeNull();
+    expect(m.estado.catalogo.producto('SKU-001')).toMatchObject({
+      visibilidadWeb: 'propuesto',
+      motivoVisibilidad: 'sin_decision',
+    });
+    await m.pasada();
+    expect(web(m.mundo, 11).status).toBe('draft');
+    expect(m.escrituras.some((e) => e.sistema === 'woocommerce')).toBe(false);
+
+    // Aprobarlo por SKU en el panel lo publica.
+    visibilidad(m.estado, 'SKU-001', 'aprobado');
+    await m.pasada();
+    expect(web(m.mundo, 11).status).toBe('publish');
+  });
+
+  it('una categoría fuera de la web deja rechazado lo que no tiene decisión; aprobarlo por SKU lo publica', async () => {
+    const mundo = mundoInicial();
+    const valvula = mundo.woo.find((w) => w.id === 11);
+    if (valvula) valvula.status = 'draft';
+    const m = await escrito(mundo);
     categorias(m.estado, true);
     expect(m.estado.catalogo.producto('SKU-001')).toMatchObject({
       visibilidadWeb: 'rechazado',
@@ -647,7 +697,11 @@ describe('GET y POST /catalogo/decisiones', () => {
         { emiteId: 'e2', sku: 'SKU-002', estado: 'confirmado', decididoPor: 'ana@example.com' },
       ],
       conflictos: [{ sku: 'SKU-001', campo: 'nombre', resueltoCon: 'woocommerce' }],
-      visibilidad: [{ sku: 'SKU-003', estado: 'aprobado' }],
+      visibilidad: [
+        { sku: 'SKU-001', estado: 'aprobado', usuario: 'web' },
+        { sku: 'SKU-003', estado: 'aprobado', usuario: null },
+        { sku: 'SKU-005', estado: 'aprobado', usuario: 'web' },
+      ],
       categoriasFuera: [{ categoria: 'Válvulas' }],
     });
     expect(await pedir('/catalogo/decisiones', { clave: 'otra' })).toMatchObject({ status: 401 });
@@ -661,7 +715,7 @@ describe('GET y POST /catalogo/decisiones', () => {
     expect(importadas).toMatchObject({
       status: 200,
       cuerpo: {
-        importadas: { reglas: 2, empates: 2, conflictos: 1, visibilidad: 1, categoriasFuera: 1 },
+        importadas: { reglas: 2, empates: 2, conflictos: 1, visibilidad: 3, categoriasFuera: 1 },
       },
     });
     expect((await pedirVacio('/catalogo/decisiones')).cuerpo).toEqual(exportadas.cuerpo);

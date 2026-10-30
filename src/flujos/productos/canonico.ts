@@ -13,10 +13,10 @@
  *   ningún cambio visto, sigue valiendo el arranque.
  * - **Precio:** bruto entero en pesos; se compara siempre en bruto. El neto (dos decimales) es
  *   derivado, con el IVA de cada sistema.
- * - **Visibilidad web:** un servicio nunca va (`no_aplica`); si no, una decisión del panel manda;
- *   sin decisión, un producto de una categoría fuera de la web queda `rechazado` (motivo
- *   `categoria`), lo que ya está en la tienda (publicado o en borrador) es `aprobado` y el resto
- *   `propuesto`.
+ * - **Visibilidad web:** un servicio nunca va (`no_aplica`); si no, una decisión manda (lo que la
+ *   lectura vio publicado en la web queda aprobado con usuario `web`); sin decisión, un producto de
+ *   una categoría fuera de la web queda `rechazado` (motivo `categoria`) y el resto, incluido un
+ *   borrador en la tienda, `propuesto`. Sólo lo aprobado se publica.
  */
 import type {
   CampoCatalogo,
@@ -210,9 +210,6 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   } else if (typeof categoria === 'string' && e.categoriasFuera?.has(categoria)) {
     visibilidadWeb = 'rechazado';
     motivoVisibilidad = 'categoria';
-  } else if (e.lecturas.woocommerce) {
-    visibilidadWeb = 'aprobado';
-    motivoVisibilidad = 'en_web';
   } else {
     visibilidadWeb = 'propuesto';
     motivoVisibilidad = 'sin_decision';

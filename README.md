@@ -151,11 +151,13 @@ los conflictos, los empates y el índice.
   `precio` van por último cambio. Antes de la primera escritura rige la **regla de arranque**: en
   nombre y precio manda la web y, sin web, Coreinbox. Desde el panel se fija otro propietario o
   «último cambio» (sólo en nombre, precio y activo), para todo el catálogo o en lote por SKU.
-- **Visibilidad web.** `no_aplica` (los servicios nunca van a la web); si no, una decisión del panel
-  (`aprobado` o `rechazado`) manda. Sin decisión: un producto de una **categoría fuera de la web**
+- **Visibilidad web.** `no_aplica` (los servicios nunca van a la web); si no, una decisión
+  (`aprobado` o `rechazado`) manda. Lo publicado hoy en la web arranca aprobado: cuando la lectura ve
+  un producto con `status: publish` y sin decisión, registra una decisión `aprobado` con usuario
+  `web` (se exporta con las demás). Sin decisión: un producto de una **categoría fuera de la web**
   (lista de categorías de Coreinbox que se fija en el panel; pensada para los repuestos) queda
-  `rechazado` con motivo `categoria`; lo que ya está en la tienda, publicado o en borrador, es
-  `aprobado`; el resto es `propuesto`.
+  `rechazado` con motivo `categoria`; el resto, incluido un borrador en la tienda, es `propuesto`.
+  Una categoría fuera de la web nunca toca lo que tiene decisión, así que no despublica lo publicado.
 - **Alcance.** Servicio → Coreinbox y Emite DTE. Bien aprobado → los tres. El resto → Coreinbox y
   Emite DTE.
 - **Conflicto.** Un campo en «último cambio» cambiado en dos sistemas desde la pasada anterior, a
@@ -272,9 +274,10 @@ resultado de cada pasada (`escritos`, `revertidos`, `creados`, `adoptados`, `fus
 #### Encenderla en certificación
 
 1. Con `FLUJO_PRODUCTOS=true` y `PRODUCTOS_ESCRIBIR=false`, dejar correr la lectura y revisar en el
-   panel: diferencias, «Lo que se escribirá» en el detalle, visibilidad web (sobre todo lo `aprobado`
-   por estar en la web en borrador, que se publicará si está activo en Coreinbox), categorías fuera
-   de la web, empates de históricos y «Quién manda».
+   panel: diferencias, «Lo que se escribirá» en el detalle, visibilidad web (lo publicado queda
+   aprobado por `web`; un borrador en la tienda queda `propuesto` y no se publica hasta aprobarlo
+   por SKU; lo publicado sólo pasa a borrador con un `rechazado` por SKU), categorías fuera de la
+   web, empates de históricos y «Quién manda».
 2. Respaldar las decisiones: `GET /catalogo/decisiones` (ver abajo).
 3. Encender por partes: `PRODUCTOS_ESCRIBIR=true` con `PRODUCTOS_ESCRIBIR_SISTEMAS=emite`, mirar los
    eventos de escritura, y después sumar `coreinbox` y `woocommerce`.

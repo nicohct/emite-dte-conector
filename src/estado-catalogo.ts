@@ -127,9 +127,10 @@ export interface ProductoCatalogo {
 
 /**
  * `servicio` (nunca a la web), `decision` (del panel), `categoria` (de una categoría fuera de la
- * web, sin decisión), `en_web` (ya está en la tienda) o `sin_decision` (propuesto).
+ * web, sin decisión) o `sin_decision` (propuesto). Lo publicado en la web es una decisión con
+ * usuario `web`.
  */
-export type MotivoVisibilidad = 'servicio' | 'decision' | 'categoria' | 'en_web' | 'sin_decision';
+export type MotivoVisibilidad = 'servicio' | 'decision' | 'categoria' | 'sin_decision';
 
 export interface EscrituraPlaneada {
   sistema: SistemaCatalogo;

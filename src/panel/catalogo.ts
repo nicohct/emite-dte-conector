@@ -119,7 +119,6 @@ const MOTIVO_VISIBILIDAD: Record<NonNullable<ProductoCatalogo['motivoVisibilidad
   servicio: 'es un servicio',
   decision: 'decisión del panel',
   categoria: 'categoría fuera de la web',
-  en_web: 'ya está en la web',
   sin_decision: 'sin decisión',
 };
 

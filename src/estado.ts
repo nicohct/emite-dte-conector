@@ -2,11 +2,13 @@
  * Lo que el conector recuerda entre pasadas, en SQLite (`node:sqlite`, sin dependencias): los
  * cursores de sincronización (cotizaciones y productos), qué cotización de Coreinbox quedó en
  * Emite DTE (o con qué error), qué producto pasó al catálogo (o por qué se omitió), qué webhooks
- * ya se procesaron y el registro canónico del catálogo (`estado.catalogo`, en `estado-catalogo.ts`).
+ * ya se procesaron, el registro canónico del catálogo (`estado.catalogo`, en `estado-catalogo.ts`)
+ * y la caché de miniaturas del panel (`estado.miniaturas`).
  */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { RegistroCatalogo } from './estado-catalogo.js';
+import { CacheMiniaturas } from './estado-miniaturas.js';
 
 // `process.getBuiltinModule` en vez de `import`: las herramientas que analizan los imports (vite,
 // vitest) todavía no reconocen `node:sqlite` como módulo nativo.
@@ -87,6 +89,8 @@ export class Estado {
   private readonly db: DatabaseSync;
   /** Registro canónico de productos por SKU (fase 1 del hub). */
   readonly catalogo: RegistroCatalogo;
+  /** Copia de la foto principal por SKU para el panel; caché derivado del índice. */
+  readonly miniaturas: CacheMiniaturas;
 
   constructor(ruta: string) {
     if (ruta !== ':memory:') mkdirSync(dirname(ruta), { recursive: true });
@@ -120,6 +124,7 @@ export class Estado {
       leer: (nombre) => this.clave(nombre),
       guardar: (nombre, valor) => this.guardarClave(nombre, valor),
     });
+    this.miniaturas = new CacheMiniaturas(this.db);
   }
 
   /** Cursor de las cotizaciones aceptadas. */

@@ -63,12 +63,59 @@ export function enlaceExterno(url: string | null, texto: string): Html {
     : html`<span class="id">${texto}</span>`;
 }
 
+export const cifra = (n: number) => html`<span class="cifra">${n.toLocaleString('es-CL')}</span>`;
+
+/** Navegación de páginas para listas paginadas; `consulta` arma el `?…` de cada página. */
+export function paginas(
+  total: number,
+  pagina: number,
+  porPagina: number,
+  consulta: (pagina: number) => string,
+  textos: { anterior: string; siguiente: string } = {
+    anterior: '← Anterior',
+    siguiente: 'Siguiente →',
+  },
+): Html {
+  const ultima = Math.max(1, Math.ceil(total / porPagina));
+  return html`<nav class="paginas" aria-label="Páginas">
+    ${pagina > 1 ? html`<a href="${consulta(pagina - 1)}" rel="prev">${textos.anterior}</a>` : ''}
+    <span class="tenue"
+      >Página <span class="cifra">${pagina}</span> de <span class="cifra">${ultima}</span> ·
+      <span class="cifra">${total}</span> en total</span
+    >
+    ${pagina < ultima ? html`<a href="${consulta(pagina + 1)}" rel="next">${textos.siguiente}</a>` : ''}
+  </nav>`;
+}
+
+/** Las secciones de la navegación, en orden. */
+export const SECCIONES = {
+  flujos: 'Flujos',
+  eventos: 'Eventos',
+  productos: 'Productos',
+  historicos: 'Históricos',
+  conflictos: 'Conflictos',
+  visibilidad: 'Visibilidad web',
+  reglas: 'Quién manda',
+} as const;
+export type Seccion = keyof typeof SECCIONES;
+
+/** Resultado de una acción del panel, que vuelve en la consulta tras la redirección. */
+export interface Aviso {
+  accion: string;
+  aplicadas: number;
+  errores: string[];
+}
+
 export interface Marco {
   titulo: string;
-  /** Prefijo de los enlaces internos: `./` dentro de `/panel/`, `panel/` en `/panel` sin barra. */
+  /**
+   * Prefijo de los enlaces internos: `./` dentro de `/panel/`, `panel/` en `/panel` sin barra y
+   * `../` un nivel más abajo (`/panel/productos/{sku}`).
+   */
   base: string;
-  activa: 'flujos' | 'eventos' | null;
+  activa: Seccion | null;
   usuario: string | null;
+  aviso?: Aviso | null;
 }
 
 const ESTILOS = `
@@ -93,7 +140,7 @@ header {
   padding: 12px 16px; border-bottom: 1px solid var(--borde);
 }
 header strong { font-size: 15px; }
-nav { display: flex; gap: 14px; }
+nav { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 nav a { color: var(--tenue); text-decoration: none; padding-bottom: 2px; }
 nav a[aria-current="page"] { color: var(--texto); border-bottom: 2px solid var(--enlace); }
 .usuario { margin-left: auto; color: var(--tenue); font-size: 12px; }
@@ -120,14 +167,52 @@ th { background: var(--suave); font-weight: 600; white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
 form.filtros { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-bottom: 12px; }
 label { display: grid; gap: 2px; color: var(--tenue); font-size: 12px; }
-select, button { font: inherit; padding: 4px 8px; color: var(--texto); background: var(--fondo); border: 1px solid var(--borde); border-radius: 6px; }
+select, button, input[type="search"] { font: inherit; padding: 4px 8px; color: var(--texto); background: var(--fondo); border: 1px solid var(--borde); border-radius: 6px; }
+button { cursor: pointer; }
+label.casilla { display: flex; gap: 6px; align-items: center; color: var(--texto); font-size: 14px; }
 .paginas { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+.pestanas { display: flex; gap: 14px; margin-bottom: 12px; }
+.pestanas a[aria-current="page"] { color: var(--texto); font-weight: 600; text-decoration: none; }
+.lote { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--borde); border-radius: 8px; background: var(--suave); }
+.botones { display: flex; flex-wrap: wrap; gap: 6px; }
+.aviso-accion { border: 1px solid currentColor; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+.aviso-accion ul { margin: 4px 0 0; padding-left: 18px; }
+.foto { display: block; object-fit: contain; background: var(--suave); border-radius: 6px; }
+.foto.chica { width: 48px; height: 48px; }
+.foto.grande { width: 240px; height: 240px; }
+.valores { display: grid; grid-template-columns: max-content 1fr; gap: 0 8px; font-size: 12px; }
+.valores dt, .valores dd { font-size: 12px; }
+.valores dd { overflow-wrap: normal; }
+.nowrap { white-space: nowrap; }
+.canonico { font-weight: 600; }
+.distinto { color: var(--aviso); }
+section.bloque { margin-top: 20px; }
+section.bloque > h2 { margin-bottom: 8px; }
+.ficha { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 `;
 
+function avisoHtml(a: Aviso): Html {
+  const clase = a.errores.length === 0 ? 'bien' : a.aplicadas === 0 ? 'mal' : 'aviso';
+  return html`<div class="aviso-accion ${clase}" role="status">
+    <strong>${a.accion}</strong>: <span class="cifra">${a.aplicadas}</span>
+    ${a.aplicadas === 1 ? 'aplicada' : 'aplicadas'}${
+      a.errores.length
+        ? html`, <span class="cifra">${a.errores.length}</span> con error
+            <ul>
+              ${a.errores.map((e) => html`<li>${e}</li>`)}
+            </ul>`
+        : ''
+    }.
+    <span class="tenue"
+      >Sólo cambia el registro del conector; no se escribió en ningún sistema.</span
+    >
+  </div>`;
+}
+
 export function pagina(m: Marco, cuerpo: Html): string {
-  const item = (clave: 'flujos' | 'eventos', texto: string) =>
+  const item = (clave: Seccion) =>
     html`<a href="${m.base}${clave}" ${m.activa === clave ? html` aria-current="page"` : ''}
-      >${texto}</a
+      >${SECCIONES[clave]}</a
     >`;
   return html`<!doctype html>
     <html lang="es">
@@ -143,10 +228,10 @@ export function pagina(m: Marco, cuerpo: Html): string {
       <body>
         <header>
           <strong>Conector</strong>
-          <nav>${item('flujos', 'Flujos')}${item('eventos', 'Eventos')}</nav>
+          <nav>${(Object.keys(SECCIONES) as Seccion[]).map(item)}</nav>
           ${m.usuario ? html`<span class="usuario">viendo como ${m.usuario}</span>` : ''}
         </header>
-        <main>${cuerpo}</main>
+        <main>${m.aviso ? avisoHtml(m.aviso) : ''}${cuerpo}</main>
       </body>
     </html> `.valor;
 }

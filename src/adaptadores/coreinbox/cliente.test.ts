@@ -122,3 +122,46 @@ describe('Coreinbox: errores', () => {
     expect((error as ErrorCoreinbox).transitorio).toBe(true);
   });
 });
+
+describe('Coreinbox.archivo', () => {
+  it('pide una URL de su API con la clave y devuelve la respuesta sin leerla', async () => {
+    const { http, peticiones } = doble(
+      new Response('bytes', { status: 200, headers: { 'content-type': 'image/png' } }),
+    );
+    const respuesta = await new Coreinbox(BASE, 'cik_prueba', http).archivo(
+      `${BASE}/api/v1/products/c1/image`,
+    );
+
+    expect(peticiones).toHaveLength(1);
+    expect(peticiones[0]?.url.href).toBe(`${BASE}/api/v1/products/c1/image`);
+    expect(peticiones[0]?.metodo).toBe('GET');
+    expect(peticiones[0]?.cabeceras.get('authorization')).toBe('Bearer cik_prueba');
+    expect(respuesta.headers.get('content-type')).toBe('image/png');
+    expect(await respuesta.text()).toBe('bytes');
+  });
+
+  it('rechaza con URL_AJENA una URL de otro host sin hacer la petición', async () => {
+    const { http, peticiones } = doble(new Response('x'));
+    const cliente = new Coreinbox(BASE, 'cik_prueba', http);
+
+    for (const url of [
+      'https://evil.example.com/api/v1/products/c1/image',
+      `${BASE}.evil.example.com/api/v1/products/c1/image`,
+      `${BASE}/otra/ruta`,
+    ]) {
+      const error = await cliente.archivo(url).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ErrorCoreinbox);
+      expect((error as ErrorCoreinbox).code).toBe('URL_AJENA');
+    }
+    expect(peticiones).toHaveLength(0);
+  });
+
+  it('una caída de red se informa como ErrorCoreinbox RED', async () => {
+    const { http } = doble(new Error('sin red'));
+    const error = await new Coreinbox(BASE, 'cik_prueba', http)
+      .archivo(`${BASE}/api/v1/products/c1/image`)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorCoreinbox);
+    expect((error as ErrorCoreinbox).code).toBe('RED');
+  });
+});

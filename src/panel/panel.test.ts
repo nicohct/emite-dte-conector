@@ -1,8 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Coreinbox } from '../adaptadores/coreinbox/cliente.js';
 import { ErrorCoreinbox } from '../adaptadores/coreinbox/cliente.js';
@@ -11,38 +8,33 @@ import { Salud } from '../salud.js';
 import { crearServidor } from '../servidor.js';
 import { crearPanel } from './index.js';
 
-const { DatabaseSync } = process.getBuiltinModule('node:sqlite') as typeof import('node:sqlite');
-
 const EMITE = 'https://facturacion.example.com';
 const ACTIVOS = { cotizaciones: true, productos: false, pedidos: false };
 
-let dir: string;
-let ruta: string;
 let estado: Estado;
+let estadoCerrado: boolean;
 let salud: Salud;
 let servidor: Server | null;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'panel-'));
-  ruta = join(dir, 'estado.sqlite');
-  estado = new Estado(ruta);
+  vi.useFakeTimers({ toFake: ['Date'] });
+  estado = new Estado(':memory:');
+  estadoCerrado = false;
   salud = new Salud(estado, ACTIVOS);
   servidor = null;
 });
 
 afterEach(async () => {
   if (servidor) await new Promise((r) => servidor!.close(r));
-  estado.cerrar();
-  rmSync(dir, { recursive: true, force: true });
+  if (!estadoCerrado) estado.cerrar();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-async function levantar(
-  opciones: { emite?: string | null; estadoRuta?: string } = {},
-): Promise<string> {
+async function levantar(opciones: { emite?: string | null } = {}): Promise<string> {
   const panel = crearPanel({
     salud: () => salud.respuesta(),
-    estadoRuta: opciones.estadoRuta ?? ruta,
+    estado,
     enlaces: { emite: opciones.emite === undefined ? EMITE : opciones.emite },
   });
   servidor = crearServidor(
@@ -60,13 +52,9 @@ async function levantar(
   return `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
 }
 
-function fijarFecha(tabla: string, columna: string, clave: string, id: string, iso: string) {
-  const db = new DatabaseSync(ruta);
-  try {
-    db.prepare(`UPDATE ${tabla} SET ${columna} = ? WHERE ${clave} = ?`).run(iso, id);
-  } finally {
-    db.close();
-  }
+/** Fija el «ahora» de `Estado` (sólo se falsea Date) antes de la próxima escritura. */
+function en(iso: string) {
+  vi.setSystemTime(new Date(iso));
 }
 
 function cotizacion(
@@ -90,9 +78,13 @@ function cotizacion(
 function poblarBasico() {
   estado.cursor = '2026-10-28T14:55:02.113Z';
   estado.cursorProductos = '2026-10-27T09:00:00.000Z';
+  en('2026-10-29T10:00:00.000Z');
   cotizacion(1);
+  en('2026-10-29T11:00:00.000Z');
   cotizacion(2, 'error', 'Empresa de Prueba SpA (76000000-0) sin dirección');
+  en('2026-10-29T12:00:00.000Z');
   estado.marcarWebhook('wh-prueba-1');
+  en('2026-10-29T13:00:00.000Z');
   estado.guardarProducto({
     productId: 'p-1',
     sku: 'SKU-PRUEBA-1',
@@ -100,6 +92,7 @@ function poblarBasico() {
     emiteId: 'ep-1',
     error: null,
   });
+  en('2026-10-29T14:00:00.000Z');
   estado.guardarProducto({
     productId: 'p-2',
     sku: null,
@@ -107,25 +100,13 @@ function poblarBasico() {
     emiteId: null,
     error: 'SIN_SKU: sin SKU',
   });
-  fijarFecha('cotizaciones', 'actualizado_en', 'quote_id', 'q-1', '2026-10-29T10:00:00.000Z');
-  fijarFecha('cotizaciones', 'actualizado_en', 'quote_id', 'q-2', '2026-10-29T11:00:00.000Z');
-  fijarFecha('webhooks_vistos', 'visto_en', 'id', 'wh-prueba-1', '2026-10-29T12:00:00.000Z');
-  fijarFecha('productos', 'actualizado_en', 'product_id', 'p-1', '2026-10-29T13:00:00.000Z');
-  fijarFecha('productos', 'actualizado_en', 'product_id', 'p-2', '2026-10-29T14:00:00.000Z');
 }
 
 /** 60 cotizaciones: COT-60 la más nueva. Con 50 por página, la página 2 trae COT-10 a COT-1. */
 function poblarSesenta() {
   for (let n = 1; n <= 60; n++) {
+    en(new Date(Date.UTC(2026, 9, 29, 10, 0, n)).toISOString());
     cotizacion(n);
-    const seg = String(n).padStart(2, '0');
-    fijarFecha(
-      'cotizaciones',
-      'actualizado_en',
-      'quote_id',
-      `q-${n}`,
-      `2026-10-29T10:00:${seg}.000Z`,
-    );
   }
 }
 
@@ -172,6 +153,15 @@ describe('panel: flujos', () => {
     expect(texto).toMatch(/Con error<\/dt>\s*<dd><span class="cifra">1<\/span>/);
     expect(texto).toMatch(/Sincronizados<\/dt>\s*<dd><span class="cifra">1<\/span>/);
     expect(texto).toMatch(/Omitidos<\/dt>\s*<dd><span class="cifra">1<\/span>/);
+  });
+
+  it('muestra la tarjeta del catálogo con enlaces al resto del panel', async () => {
+    const base = await levantar();
+    const { texto } = await pedir(`${base}/panel/flujos`);
+    expect(texto).toContain('<h2>Catálogo</h2>');
+    expect(hrefs(texto)).toEqual(
+      expect.arrayContaining(['./productos', './historicos', './conflictos']),
+    );
   });
 
   it('sin pasadas ni fallas lo dice', async () => {
@@ -237,7 +227,28 @@ describe('panel: enlaces', () => {
   it('en /panel los enlaces de navegación llevan el prefijo panel/', async () => {
     const base = await levantar();
     const { texto } = await pedir(`${base}/panel`);
-    expect(hrefs(texto)).toEqual(expect.arrayContaining(['panel/flujos', 'panel/eventos']));
+    expect(hrefs(texto)).toEqual(
+      expect.arrayContaining([
+        'panel/flujos',
+        'panel/eventos',
+        'panel/productos',
+        'panel/historicos',
+        'panel/conflictos',
+        'panel/visibilidad',
+        'panel/reglas',
+      ]),
+    );
+    for (const nombre of [
+      'Flujos',
+      'Eventos',
+      'Productos',
+      'Históricos',
+      'Conflictos',
+      'Visibilidad web',
+      'Quién manda',
+    ]) {
+      expect(texto).toContain(nombre);
+    }
   });
 
   it.each(['/panel/', '/panel/flujos', '/panel/eventos'])(
@@ -276,11 +287,10 @@ describe('panel: enlaces', () => {
     const base = await levantar();
     const { texto } = await pedir(`${base}/panel/eventos`);
     expect(hrefs(texto)).toContain(`${EMITE}/cotizaciones/em-1`);
-    expect(texto).toContain('N° 1');
     expect(texto).toMatch(/target="_blank" rel="noopener noreferrer"/);
   });
 
-  it('sin URL de Emite DTE no hay enlaces externos pero sí el número', async () => {
+  it('sin URL de Emite DTE no hay enlaces externos pero sí el id', async () => {
     poblarBasico();
     const base = await levantar({ emite: null });
     for (const ruta_ of ['/panel/flujos', '/panel/eventos']) {
@@ -289,7 +299,7 @@ describe('panel: enlaces', () => {
       expect(texto).not.toContain('target="_blank"');
     }
     const { texto } = await pedir(`${base}/panel/eventos`);
-    expect(texto).toContain('N° 1');
+    expect(texto).toContain('em-1');
     expect(texto).toContain('SKU-PRUEBA-1');
   });
 });
@@ -302,7 +312,7 @@ describe('panel: eventos', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(texto).toContain('COT-1');
-    expect(texto).toContain('COT-2');
+    expect(texto).toContain('>q-2<');
     expect(texto).toContain('creada');
     expect(texto).toContain('Empresa de Prueba SpA (76000000-0) sin dirección');
     expect(texto).toContain('wh-prueba-1');
@@ -311,9 +321,9 @@ describe('panel: eventos', () => {
     expect(texto).toContain('sincronizado');
     expect(texto).toContain('omitido');
     expect(texto).toContain('SIN_SKU: sin SKU');
-    expect(texto).toContain('SKU SKU-PRUEBA-1');
-    expect(texto).toContain('sin SKU');
+    expect(hrefs(texto)).toContain('./productos/SKU-PRUEBA-1');
     expect(texto).toContain('5</span> en total');
+    expect(texto).toContain('<th>SKU</th>');
   });
 
   it('ordena del más nuevo al más antiguo', async () => {
@@ -331,8 +341,8 @@ describe('panel: eventos', () => {
     const base = await levantar();
     const { texto } = await pedir(`${base}/panel/eventos?flujo=cotizaciones&estado=error`);
     expect(filas(texto)).toBe(1);
-    expect(texto).toContain('COT-2');
-    expect(texto).not.toContain('COT-1<');
+    expect(texto).toContain('>q-2<');
+    expect(texto).not.toContain('>q-1<');
     expect(texto).toMatch(/<option value="cotizaciones"\s+selected>/);
     expect(texto).toContain('Quitar filtros');
   });
@@ -353,6 +363,87 @@ describe('panel: eventos', () => {
     const { texto } = await pedir(`${base}/panel/eventos?estado=omitido`);
     expect(filas(texto)).toBe(1);
     expect(texto).toContain('SIN_SKU: sin SKU');
+  });
+
+  describe('del registro del catálogo', () => {
+    function poblarCatalogo() {
+      en('2026-10-29T09:00:00.000Z');
+      estado.catalogo.abrirConflicto(
+        'SKU-001',
+        'precio',
+        { coreinbox: { valor: 100, en: null }, woocommerce: { valor: 120, en: null } },
+        '2026-10-29T09:00:00.000Z',
+      );
+      estado.catalogo.guardarHistorico({
+        emiteId: 'eh-1',
+        codigo: 'VIEJO-1',
+        nombre: 'Producto histórico de prueba',
+        activo: true,
+        fusionadoEnId: null,
+        uso: null,
+        modificadoEn: null,
+        leidoEn: '2026-10-29T09:30:00.000Z',
+      });
+      estado.catalogo.proponerEmpate(
+        'eh-1',
+        { sku: 'SKU-002', puntaje: 0.9, motivo: 'mismo nombre', detalle: '{}' },
+        '2026-10-29T10:00:00.000Z',
+      );
+      estado.catalogo.registrarAccion(
+        'visibilidad',
+        'admin@example.com',
+        {},
+        '2026-10-29T11:00:00.000Z',
+      );
+    }
+
+    it('muestra conflictos, empates y acciones con su nombre y enlace al SKU', async () => {
+      poblarCatalogo();
+      const base = await levantar();
+      const { res, texto } = await pedir(`${base}/panel/eventos`);
+      expect(res.status).toBe(200);
+      expect(filas(texto)).toBe(3);
+      expect(texto).toContain('<td>Conflicto</td>');
+      expect(texto).toContain('<td>Empate de histórico</td>');
+      expect(texto).toContain('<td>Acción del panel</td>');
+      expect(hrefs(texto)).toEqual(
+        expect.arrayContaining(['./productos/SKU-001', './productos/SKU-002']),
+      );
+      expect(texto).toContain('campo <strong>precio</strong>');
+      expect(texto).toContain('por admin@example.com');
+      expect(texto).toContain('3</span> en total');
+      const orden = ['Acción del panel', 'Empate de histórico', 'Conflicto'].map((n) =>
+        posicion(texto, `<td>${n}</td>`),
+      );
+      expect(orden).toEqual([...orden].sort((a, b) => a - b));
+    });
+
+    it('?estado=abierto deja sólo el conflicto', async () => {
+      poblarCatalogo();
+      const base = await levantar();
+      const { texto } = await pedir(`${base}/panel/eventos?estado=abierto`);
+      expect(filas(texto)).toBe(1);
+      expect(texto).toContain('<td>Conflicto</td>');
+      expect(texto).not.toContain('<td>Empate de histórico</td>');
+      expect(texto).toMatch(/<option value="abierto"\s+selected>/);
+    });
+
+    it('?estado=visibilidad deja sólo la acción', async () => {
+      poblarCatalogo();
+      const base = await levantar();
+      const { texto } = await pedir(`${base}/panel/eventos?estado=visibilidad`);
+      expect(filas(texto)).toBe(1);
+      expect(texto).toContain('<td>Acción del panel</td>');
+      expect(texto).not.toContain('<td>Conflicto</td>');
+    });
+
+    it('?estado=propuesto deja sólo el empate', async () => {
+      poblarCatalogo();
+      const base = await levantar();
+      const { texto } = await pedir(`${base}/panel/eventos?estado=propuesto`);
+      expect(filas(texto)).toBe(1);
+      expect(texto).toContain('<td>Empate de histórico</td>');
+    });
   });
 
   it('sin resultados lo dice con los filtros', async () => {
@@ -410,6 +501,7 @@ describe('panel: paginación', () => {
 
   it('los enlaces de página conservan los filtros', async () => {
     poblarSesenta();
+    en('2026-10-29T11:00:00.000Z');
     estado.guardarProducto({
       productId: 'p-1',
       sku: 'SKU-PRUEBA-1',
@@ -486,6 +578,14 @@ describe('panel: rutas y métodos', () => {
     expect(texto).toContain('Método no permitido');
   });
 
+  it('GET /panel/acciones/reglas responde 405 con Allow: POST', async () => {
+    const base = await levantar();
+    const { res, texto } = await pedir(`${base}/panel/acciones/reglas`);
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+    expect(texto).toContain('Método no permitido');
+  });
+
   it('HEAD /panel/flujos responde 200 sin cuerpo', async () => {
     const base = await levantar();
     const res = await fetch(`${base}/panel/flujos`, { method: 'HEAD' });
@@ -507,6 +607,7 @@ describe('panel: rutas y métodos', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(res.headers.get('content-security-policy')).toContain("img-src 'self'");
   });
 });
 
@@ -538,16 +639,16 @@ describe('panel montado junto al resto del servidor', () => {
 describe('panel: estado ilegible', () => {
   it('responde 500 HTML sin filtrar el error', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const faltante = join(dir, 'secreto-interno', 'no-existe.sqlite');
-    const base = await levantar({ estadoRuta: faltante });
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const base = await levantar();
+    estado.cerrar();
+    estadoCerrado = true;
     for (const ruta_ of ['/panel/flujos', '/panel/eventos']) {
       const { res, texto } = await pedir(base + ruta_);
       expect(res.status).toBe(500);
       expect(res.headers.get('content-type')).toContain('text/html');
       expect(texto).toContain('No se pudo leer el estado');
-      expect(texto).not.toContain('secreto-interno');
-      expect(texto).not.toContain('no-existe');
-      expect(texto).not.toMatch(/unable to open|SQLITE/i);
+      expect(texto).not.toMatch(/database|sqlite|not open/i);
     }
   });
 });

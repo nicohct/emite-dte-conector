@@ -60,7 +60,7 @@ Las pruebas (`*.test.ts`) están junto al código que prueban y no aparecen en e
 | B · Pedidos web                   | WooCommerce → Emite DTE → WooCommerce     | `FLUJO_PEDIDOS` (sin implementar: encendido sólo deja un aviso) | Planificado, enero de 2027                                                             |
 | C · Productos transversales       | entre los tres, registro canónico por SKU | `FLUJO_PRODUCTOS` (apagado por omisión)                         | Fase 1a: lectura y registro canónico. Fase 1b (escritura, fusiones): noviembre de 2026 |
 | D · Solicitudes de cotización web | WooCommerce → Coreinbox                   | —                                                               | Por evaluar frente al lector de correo de Coreinbox                                    |
-| E · Panel                         | —                                         | —                                                               | Noviembre de 2026, junto con C                                                         |
+| E · Panel                         | —                                         | —                                                               | Flujos, eventos, productos y decisiones del catálogo (sólo el registro hasta la 1b)    |
 
 El plan completo está en `docs/10-conector-hub.md` del repositorio de Emite DTE.
 
@@ -192,6 +192,7 @@ Están pensadas para la red interna y el panel.
 
 Las acciones responden `{ aplicadas, errores: [{ indice, error }] }`, procesan en lote (hasta 500) y
 registran la cabecera `X-Emite-Usuario`. En la 1a sólo cambian el registro; no escriben en los sistemas.
+El panel usa las mismas acciones desde sus formularios (ver «Panel»).
 
 ### Escritura de antes (`PRODUCTOS_ESCRIBIR=true`)
 
@@ -351,17 +352,68 @@ Emite DTE.
 
 ## Panel
 
-El conector sirve un panel de sólo lectura en `/panel`. Es HTML generado por el propio proceso, sin
-JavaScript ni dependencias.
+El conector sirve un panel en `/panel`. Es HTML generado por el propio proceso, sin JavaScript ni
+dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
 
 - **Flujos** (`/panel` o `/panel/flujos`): por flujo (cotizaciones, productos, pedidos) si está
   activo, su cursor, contadores, última pasada, última falla con código, status y si fue transitoria,
-  y los errores recientes.
-- **Eventos** (`/panel/eventos`): lo último que pasó por el conector, en orden inverso (cotizaciones
-  creadas o con error, webhooks recibidos, productos sincronizados u omitidos con su motivo). Filtros
-  por consulta: `?flujo=cotizaciones|productos&estado=creada|visto|sincronizado|omitido|error`, y
-  paginación con `?pagina=2` (50 por página). Los enlaces a la cotización en Emite DTE usan
+  y los errores recientes. La tarjeta **Catálogo** suma el resumen del registro (SKUs, leídos por
+  sistema, históricos, con diferencias, en conflicto, empates propuestos, sin SKU), cada cifra con
+  enlace a su lista filtrada.
+- **Eventos** (`/panel/eventos`): lo último que pasó, en orden inverso: cotizaciones creadas o con
+  error, webhooks recibidos, productos sincronizados u omitidos, conflictos abiertos o resueltos,
+  empates propuestos o decididos y acciones del panel, con enlace al SKU cuando lo hay. Filtros por
+  consulta `?flujo=cotizaciones|productos&estado=…` (los estados de cada tipo, o el nombre de la
+  acción) y `?pagina=2` (50 por página). Los enlaces a la cotización en Emite DTE usan
   `EMITE_URL_PUBLICA`.
+- **Productos** (`/panel/productos`): tabla por SKU con la foto, el valor canónico y el de cada
+  sistema en nombre, precio bruto y activo (los que difieren, marcados), tipo, alcance, visibilidad
+  web y avisos. Filtros `q`, `diferencias=1`, `conflicto=1`, `sin_sku=1`, `propuesto_web=1` e
+  `historicos=1`, y paginación. Desde la misma pantalla, las vistas **Históricos** y **Sin SKU**
+  (`?vista=sin_sku&sistema=…`).
+- **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno,
+  reglas que le aplican, conflictos, empates con su histórico, índice de enlaces (cada URL abre el
+  sistema en otra pestaña) y la foto principal.
+- **Históricos** (`/panel/historicos`): los productos históricos de Emite DTE con su uso y su
+  empate (puntaje, motivo); confirmar o rechazar uno a uno o en lote. Filtro
+  `?estado=propuesto|confirmado|rechazado|sin_candidato`.
+- **Conflictos** (`/panel/conflictos`): los abiertos de todo el catálogo; «quedarse con el de la
+  web / Coreinbox / Emite DTE», uno a uno o en lote.
+- **Visibilidad web** (`/panel/visibilidad`): los propuestos para la web; aprobar o rechazar, uno
+  a uno o en lote. Un servicio no se ofrece.
+- **Quién manda** (`/panel/reglas`): qué sistema manda en cada campo para todo el catálogo. En lote
+  por SKU, eligiéndolos en la lista de productos; para uno, desde su detalle.
+
+### Acciones
+
+Las decisiones son formularios HTML que mandan `POST /panel/acciones/{reglas|empates|conflictos|visibilidad}`
+y usan la misma lógica que la API JSON (`src/flujos/productos/acciones.ts`). No piden
+`CATALOGO_API_KEY`: el panel está detrás de Emite DTE, y la cabecera `X-Emite-Usuario` queda como
+usuario de la decisión. Tras aplicar, redirigen (303) a la pantalla de origen con el resultado
+(aplicadas y errores). Cada acción queda en la bitácora y aparece como evento `accion`.
+
+**Hasta la fase 1b, las decisiones del panel sólo cambian el registro del conector: no escriben en
+Coreinbox, en la web ni en Emite DTE.**
+
+Protección mínima contra envíos desde otro sitio, sin cookies ni sesiones propias: un POST se rechaza
+con 403 si trae `Sec-Fetch-Site` y no es `same-origin` ni `none`, o si trae `Origin` y su host no es
+el de `Host`. Por eso el reenvío de Emite DTE debe conservar la cabecera `Host` del navegador.
+
+### Miniatura de la foto principal
+
+`GET /panel/imagen/{sku}` sirve la foto principal del SKU: la primera imagen de la web si el producto
+está en la web; si no, la de Coreinbox (descargada con su clave por el adaptador). Sólo se descargan
+URL que están en el índice del catálogo, nunca una que venga en la petición. La copia queda en la
+tabla `miniaturas` del SQLite con el hash de la entrada del índice; si ese hash cambia, se vuelve a
+descargar. Tope de 1 MB y sólo PNG, JPEG, GIF, WebP o AVIF; sin foto, con la descarga fallida o
+sobre el tope responde 404 y la pantalla deja un hueco. Se sirve con
+`cache-control: private, max-age=86400`. No se redimensiona: el CSS la muestra a 48 px en la lista
+y a 240 px en el detalle.
+
+Es un caché derivado del índice: borrar la tabla no pierde nada, el panel vuelve a descargar las
+fotos a medida que se piden.
+
+### Dónde se ve
 
 Se verá dentro de Emite DTE, en Administración → «Integraciones», cuando el núcleo tenga esa sección:
 reenvía `/integraciones/conector/…` al conector y agrega la cabecera `X-Emite-Usuario`, que el panel
@@ -373,8 +425,7 @@ configurado).
 **No tiene autenticación propia: no debe exponerse a Internet.** Sólo se alcanza por la red interna
 del compose.
 
-Lee el mismo SQLite del estado en modo de sólo lectura. La última pasada y la última falla viven en
-memoria y se pierden al reiniciar.
+La última pasada y la última falla viven en memoria y se pierden al reiniciar.
 
 ## Qué no hace (todavía)
 
@@ -388,7 +439,8 @@ memoria y se pierden al reiniciar.
   desactiva ni borra nada en Emite DTE.
 - No lee las variaciones de los productos variables: sólo el SKU del padre.
 - No detecta los productos borrados en Coreinbox ni en la web: se quedan con su última lectura.
-- No descarga imágenes ni documentos: sólo indexa la URL y el hash SHA-256.
+- No descarga documentos: sólo indexa la URL y el hash SHA-256. De las imágenes, sólo la foto
+  principal de cada SKU, como miniatura del panel.
 - El flujo de pedidos no está implementado.
 
 ## Desarrollo

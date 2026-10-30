@@ -200,6 +200,25 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
   const ruta = url.pathname;
   if (url.origin === CI) {
     const sobre = (data: unknown) => ({ success: true, data, meta: { timestamp: T2 } });
+    if (metodo === 'POST' && ruta === '/api/v1/products') {
+      if (mundo.coreinbox.some((c) => c.sku === cuerpo.sku)) {
+        return respuesta({ success: false, error: { code: 'SKU_DUPLICATED' } }, 409);
+      }
+      const p = coreinbox(`ci-${String(cuerpo.sku)}`, {
+        sku: String(cuerpo.sku),
+        name: String(cuerpo.name),
+        type: String(cuerpo.type),
+        unitPrice: String(cuerpo.unitPrice),
+        isTaxable: cuerpo.isTaxable !== false,
+        taxRate: cuerpo.isTaxable === false ? '0' : '0.19',
+        categoryId: typeof cuerpo.categoryId === 'string' ? cuerpo.categoryId : null,
+        isActive: cuerpo.isActive !== false,
+        unit: null,
+        updatedAt: tic(mundo),
+      });
+      mundo.coreinbox.push(p);
+      return respuesta(sobre(p), 201);
+    }
     const id = ruta.match(/^\/api\/v1\/products\/([^/]+)$/)?.[1];
     if (metodo === 'PATCH' && id) {
       const p = mundo.coreinbox.find((c) => c.id === decodeURIComponent(id));

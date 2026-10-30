@@ -433,7 +433,7 @@ export function pantallaProducto(
             <th scope="row">${NOMBRE_CAMPO[campo]}</th>
             <td>
               <span class="canonico">${valor(campo, c?.valor)}</span>
-              ${c?.fuente ? html`<br /><span class="tenue">de ${NOMBRE_SISTEMA[c.fuente]}</span>` : ''}
+              ${c?.fuente ? html`<br /><span class="tenue">de ${c.fuente === 'panel' ? 'el panel (pendiente)' : NOMBRE_SISTEMA[c.fuente]}</span>` : ''}
               ${c?.modo ? html`<br /><span class="tenue">${c.modo === 'ultimo' ? 'último cambio' : 'propietario'}</span>` : ''}
               ${c?.conflicto ? html`<br /><span class="etiqueta aviso">en conflicto</span>` : ''}
             </td>

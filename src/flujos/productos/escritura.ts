@@ -4,8 +4,9 @@
  * (`escrituras` y `crearEn`) y los empates confirmados con los históricos de Emite DTE.
  *
  * - **Orden por SKU:** adoptar el histórico con el código exacto (empate confirmado), crear lo que
- *   falte del alcance (en Emite DTE y, si está aprobado, en la web; nunca en Coreinbox), fusionar
- *   los demás históricos confirmados en el canónico y escribir los campos que difieren.
+ *   falte del alcance (en Emite DTE y, si está aprobado, en la web; en Coreinbox sólo un alta del
+ *   panel), fusionar los demás históricos confirmados en el canónico y escribir los campos que
+ *   difieren. Lo creado queda como su lectura, con el eco marcado.
  * - **Eco:** cada escritura anota `escritoValor` en el campo del sistema destino; la lectura
  *   siguiente que lo devuelve no es un cambio. Mientras no se vuelve a leer, no se reescribe.
  * - **Fallas:** una transitoria deja el SKU para la pasada siguiente y no se le escribe más a ese
@@ -14,7 +15,12 @@
  *   mano» en el SKU.
  * - **Nunca** se borra nada ni se cambia un código.
  */
-import type { CategoriaCoreinbox, Coreinbox } from '../../adaptadores/coreinbox/cliente.js';
+import type {
+  CategoriaCoreinbox,
+  Coreinbox,
+  ProductoCoreinbox,
+  ProductoNuevoCoreinbox,
+} from '../../adaptadores/coreinbox/cliente.js';
 import { ErrorCoreinbox } from '../../adaptadores/coreinbox/cliente.js';
 import type {
   CambiosProducto,
@@ -41,7 +47,14 @@ import type { Estado } from '../../estado.js';
 import { log } from '../../log.js';
 import { esTransitorio } from '../comun.js';
 import { TASA_IVA, netoDesdeBruto } from './canonico.js';
-import { desdeEmite, desdeWoo, horaUtc, recalcular, recalcularTodo } from './lectura.js';
+import {
+  desdeCoreinbox,
+  desdeEmite,
+  desdeWoo,
+  horaUtc,
+  recalcular,
+  recalcularTodo,
+} from './lectura.js';
 
 export interface DependenciasEscritura {
   coreinbox: Coreinbox;
@@ -200,6 +213,59 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
   const categoriaCoreinbox = async (nombre: string): Promise<string | null> => {
     categorias ??= new Map((await d.coreinbox.categorias()).map((c) => [c.name.trim(), c]));
     return categorias.get(nombre.trim())?.id ?? null;
+  };
+
+  // --- Coreinbox: crear sólo lo que nació en el panel ---
+
+  const crearEnCoreinbox = async (p: ProductoCatalogo): Promise<void> => {
+    const alta = registro.alta(p.sku);
+    if (!alta) return;
+    const exento = alta.exento;
+    // La carga es el alta: la categoría va por nombre y se resuelve a su id al mandarla.
+    const datos: ProductoNuevoCoreinbox = {
+      name: alta.nombre,
+      sku: alta.sku,
+      type: alta.tipo === 'servicio' ? 'service' : 'product',
+      unitPrice: netoDesdeBruto(alta.precio, exento ? 0 : TASA_IVA),
+      currencyCode: 'CLP',
+      isTaxable: !exento,
+      ...(alta.activo ? {} : { isActive: false }),
+    };
+    let sinCategoria = false;
+    const creado = await operar(
+      {
+        sku: p.sku,
+        sistema: 'coreinbox',
+        operacion: 'crear',
+        carga: { ...datos, categoria: alta.categoria },
+      },
+      async (): Promise<ProductoCoreinbox> => {
+        const categoryId = alta.categoria ? await categoriaCoreinbox(alta.categoria) : null;
+        sinCategoria = alta.categoria !== null && categoryId === null;
+        return d.coreinbox.crearProducto({ ...datos, ...(categoryId ? { categoryId } : {}) });
+      },
+    );
+    if (!creado.ok) return;
+    const porId = new Map([...(categorias?.values() ?? [])].map((c) => [c.id, c]));
+    quedarCon(desdeCoreinbox(d.coreinbox, creado.valor, p.sku, porId, en).lectura, [
+      'nombre',
+      'precio',
+      'activo',
+      'categoria',
+    ]);
+    r.creados++;
+    const aviso = sinCategoria
+      ? `; sin categoría: «${alta.categoria ?? ''}» no existe en Coreinbox`
+      : '';
+    evento('creado', p.sku, 'coreinbox', {
+      idExterno: creado.valor.id,
+      mensaje: `creado en Coreinbox desde el panel${aviso}`,
+    });
+    log(sinCategoria ? 'warn' : 'info', 'producto del panel creado en Coreinbox', {
+      sku: p.sku,
+      coreinboxId: creado.valor.id,
+      ...(sinCategoria ? { categoriaQueNoExiste: alta.categoria } : {}),
+    });
   };
 
   // --- Emite DTE: adoptar, crear y fusionar ---
@@ -487,6 +553,11 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
     if (!hayTrabajo) continue;
 
     if (conEmpates.has(sku) && (await empates(p))) {
+      recalcular(registro, sku);
+      p = registro.producto(sku) ?? p;
+    }
+    if (p.crearEn?.includes('coreinbox') && habilitado('coreinbox')) {
+      await crearEnCoreinbox(p);
       recalcular(registro, sku);
       p = registro.producto(sku) ?? p;
     }

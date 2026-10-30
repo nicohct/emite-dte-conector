@@ -2,17 +2,18 @@
  * Lectura consolidada del catálogo y acciones del panel, en JSON:
  *
  * - `GET /catalogo`: productos por SKU, paginados (`pagina`, `limite` hasta 200), con filtros
- *   `q`, `diferencias`, `conflicto`, `sin_sku`, `propuesto_web` e `historicos`. Con
- *   `vista=historicos` lista los históricos de Emite DTE con sus empates y con `vista=sin_sku` los
- *   productos sin SKU de cada sistema.
+ *   `q`, `diferencias`, `conflicto`, `sin_sku`, `propuesto_web`, `historicos` y `pendientes` (con
+ *   un alta o una edición del panel sin escribir). Con `vista=historicos` lista los históricos de
+ *   Emite DTE con sus empates y con `vista=sin_sku` los productos sin SKU de cada sistema.
  * - `GET /catalogo/{sku}`: canónico, valor en cada sistema, tipo, alcance, visibilidad,
- *   conflictos, empates, índice de enlaces, lo que la escritura haría (`escrituras`, `crearEn`)
- *   y sus últimos eventos de escritura.
- * - `POST /catalogo/acciones/{reglas|empates|conflictos|visibilidad|categorias}`: decisiones del
- *   panel. Cambian el registro; la pasada de escritura siguiente las lleva a los sistemas.
- * - `GET /catalogo/decisiones`: todas las decisiones humanas en JSON, para respaldarlas.
- *   `POST /catalogo/decisiones` repone un respaldo (idempotente). Un SKU llamado `decisiones`
- *   se consulta igual por `GET /catalogo?q=decisiones`.
+ *   conflictos, empates, índice de enlaces, lo que la escritura haría (`escrituras`, `crearEn`),
+ *   lo pendiente del panel (`pendientes`: alta y ediciones) y sus últimos eventos de escritura.
+ * - `POST /catalogo/acciones/{reglas|empates|conflictos|visibilidad|categorias|alta|edicion}`:
+ *   decisiones, altas y ediciones del panel. Cambian el registro; la pasada de escritura siguiente
+ *   las lleva a los sistemas.
+ * - `GET /catalogo/decisiones`: todas las decisiones humanas y lo pendiente del panel en JSON,
+ *   para respaldarlas. `POST /catalogo/decisiones` repone un respaldo (idempotente). Un SKU llamado
+ *   `decisiones` se consulta igual por `GET /catalogo?q=decisiones`.
  *
  * Todo con `Authorization: Bearer <CATALOGO_API_KEY>`. Sin clave configurada las rutas no existen
  * (404). La cabecera `X-Emite-Usuario` (la pone Emite DTE con el correo del admin) queda
@@ -172,6 +173,7 @@ function listar(registro: RegistroCatalogo, q: URLSearchParams) {
     sinSku: bandera(q, 'sin_sku'),
     propuestoWeb: bandera(q, 'propuesto_web'),
     historicos: bandera(q, 'historicos'),
+    pendientes: bandera(q, 'pendientes'),
   };
   const texto = q.get('q')?.trim();
   if (texto) filtro.q = texto;
@@ -229,6 +231,7 @@ export function detalleDe(registro: RegistroCatalogo, sku: string) {
       historico: registro.historico(e.emiteId),
     })),
     indice: registro.indice(sku),
+    pendientes: { alta: registro.alta(sku), ediciones: registro.pendientes(sku) },
     eventos: registro.eventosDeSku(sku, 20),
   };
 }

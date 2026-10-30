@@ -124,7 +124,7 @@ export type CambiosProductoCoreinbox = Partial<{
 
 /**
  * Cuerpo de `POST /products` (`CreateProductDto`): sólo lo que el catálogo lee. Sin listas de
- * precios. El catálogo no lo usa todavía: la fase 1c decide si el hub llega a crear en Coreinbox.
+ * precios. El catálogo lo usa sólo para lo que nace en el panel (fase 1c).
  */
 export interface ProductoNuevoCoreinbox {
   name: string;
@@ -134,6 +134,8 @@ export interface ProductoNuevoCoreinbox {
   currencyCode: 'CLP';
   isTaxable?: boolean;
   categoryId?: string | null;
+  /** Sólo se manda para crear un producto inactivo; por omisión Coreinbox lo crea activo. */
+  isActive?: boolean;
 }
 
 export interface CategoriaCoreinbox {

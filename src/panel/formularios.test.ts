@@ -200,6 +200,16 @@ describe('avisoDe', () => {
 describe('mismoOrigen', () => {
   const host = '127.0.0.1:4000';
 
+  it('detrás del reenvío compara Origin con X-Forwarded-Host', () => {
+    const interno = { host: 'conector:8080', origin: 'https://facturacion.ejemplo' };
+    expect(mismoOrigen(req({ ...interno, 'x-forwarded-host': 'facturacion.ejemplo' }))).toBe(true);
+    expect(
+      mismoOrigen(req({ ...interno, 'x-forwarded-host': 'facturacion.ejemplo, conector:8080' })),
+    ).toBe(true);
+    expect(mismoOrigen(req({ ...interno, 'x-forwarded-host': 'otro.ejemplo' }))).toBe(false);
+    expect(mismoOrigen(req(interno))).toBe(false);
+  });
+
   it('sin cabeceras de navegador pasa (curl, pruebas)', () => {
     expect(mismoOrigen(req({ host }))).toBe(true);
   });

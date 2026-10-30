@@ -397,7 +397,8 @@ Coreinbox, en la web ni en Emite DTE.**
 
 Protección mínima contra envíos desde otro sitio, sin cookies ni sesiones propias: un POST se rechaza
 con 403 si trae `Sec-Fetch-Site` y no es `same-origin` ni `none`, o si trae `Origin` y su host no es
-el de `Host`. Por eso el reenvío de Emite DTE debe conservar la cabecera `Host` del navegador.
+el pedido: el primer valor de `X-Forwarded-Host` si viene, o si no `Host`. Por eso el reenvío de
+Emite DTE debe conservar `Host` o mandar `X-Forwarded-Host` con el host del navegador.
 
 ### Miniatura de la foto principal
 

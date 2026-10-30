@@ -14,8 +14,10 @@ const MAX_ERRORES_AVISO = 10;
 
 /**
  * Rechaza (false) un POST que el navegador marca como de otro sitio: `Sec-Fetch-Site` presente y
- * distinto de `same-origin` o `none`, o `Origin` presente y con otro host que `Host`. Sin cookies
- * ni sesiones propias: el panel confía en que sólo se llega a él a través de Emite DTE.
+ * distinto de `same-origin` o `none`, o `Origin` presente y con otro host que el pedido. El host
+ * pedido es el primer valor de `X-Forwarded-Host` si viene (el reenvío de Emite DTE reescribe
+ * `Host` al host interno del conector) y si no, `Host`. Sin cookies ni sesiones propias: el panel
+ * confía en que sólo se llega a él a través de Emite DTE.
  */
 export function mismoOrigen(req: IncomingMessage): boolean {
   const sitio = cabecera(req, 'sec-fetch-site');
@@ -23,7 +25,8 @@ export function mismoOrigen(req: IncomingMessage): boolean {
   const origen = cabecera(req, 'origin');
   if (origen === undefined) return true;
   try {
-    return new URL(origen).host === cabecera(req, 'host');
+    const reenviado = cabecera(req, 'x-forwarded-host')?.split(',')[0]?.trim();
+    return new URL(origen).host === (reenviado || cabecera(req, 'host'));
   } catch {
     return false;
   }

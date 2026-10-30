@@ -347,8 +347,19 @@ export function recalcular(registro: RegistroCatalogo, sku: string): void {
   }
   const cerradas = pendientesCerradas(entrada, producto);
   if (cerradas.length > 0) {
-    for (const ed of cerradas) registro.quitarPendiente(sku, ed.campo, ed.en);
-    log('info', 'ediciones del panel cerradas', { sku, campos: cerradas.map((ed) => ed.campo) });
+    for (const { edicion: ed, descartadaEn } of cerradas) {
+      registro.quitarPendiente(sku, ed.campo, ed.en);
+      // Una edición que perdió ante un cambio posterior en un sistema queda a la vista en Eventos.
+      if (descartadaEn) {
+        const detalle = { sku, campo: ed.campo, valor: ed.valor, editadaEn: ed.en };
+        registro.registrarAccion('descartada', ed.usuario, detalle, descartadaEn);
+      }
+    }
+    log('info', 'ediciones del panel cerradas', {
+      sku,
+      campos: cerradas.map((c) => c.edicion.campo),
+      descartadas: cerradas.filter((c) => c.descartadaEn).map((c) => c.edicion.campo),
+    });
     recalcular(registro, sku);
     return;
   }

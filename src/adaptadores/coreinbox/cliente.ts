@@ -120,6 +120,7 @@ export type CambiosProductoCoreinbox = Partial<{
   unitPrice: number;
   isActive: boolean;
   categoryId: string | null;
+  type: 'product' | 'service';
 }>;
 
 /**
@@ -133,9 +134,8 @@ export interface ProductoNuevoCoreinbox {
   unitPrice: number;
   currencyCode: 'CLP';
   isTaxable?: boolean;
+  /** Sin `isActive`: el alta lo crea activo y un producto inactivo se desactiva con `PATCH`. */
   categoryId?: string | null;
-  /** Sólo se manda para crear un producto inactivo; por omisión Coreinbox lo crea activo. */
-  isActive?: boolean;
 }
 
 export interface CategoriaCoreinbox {

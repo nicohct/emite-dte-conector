@@ -229,7 +229,6 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       unitPrice: netoDesdeBruto(alta.precio, exento ? 0 : TASA_IVA),
       currencyCode: 'CLP',
       isTaxable: !exento,
-      ...(alta.activo ? {} : { isActive: false }),
     };
     let sinCategoria = false;
     const creado = await operar(
@@ -242,7 +241,12 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       async (): Promise<ProductoCoreinbox> => {
         const categoryId = alta.categoria ? await categoriaCoreinbox(alta.categoria) : null;
         sinCategoria = alta.categoria !== null && categoryId === null;
-        return d.coreinbox.crearProducto({ ...datos, ...(categoryId ? { categoryId } : {}) });
+        const nuevo = await d.coreinbox.crearProducto({
+          ...datos,
+          ...(categoryId ? { categoryId } : {}),
+        });
+        // `CreateProductDto` no acepta `isActive`: un alta inactiva se desactiva enseguida.
+        return alta.activo ? nuevo : d.coreinbox.actualizarProducto(nuevo.id, { isActive: false });
       },
     );
     if (!creado.ok) return;
@@ -251,6 +255,7 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       'nombre',
       'precio',
       'activo',
+      'tipo',
       'categoria',
     ]);
     r.creados++;
@@ -475,6 +480,9 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
           cambios.unitPrice = netoDesdeBruto(w.valor, tasa);
         }
         if (w.campo === 'activo') cambios.isActive = w.valor;
+        if (w.campo === 'tipo' && (w.valor === 'bien' || w.valor === 'servicio')) {
+          cambios.type = w.valor === 'servicio' ? 'service' : 'product';
+        }
         if (w.campo === 'categoria' && typeof w.valor === 'string') {
           const id = await categoriaCoreinbox(w.valor);
           if (id) cambios.categoryId = id;
@@ -497,7 +505,9 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       escribir = () => woo.actualizarProducto(Number(lectura.idExterno), cambios);
     } else {
       const cambios: CambiosProducto = {};
-      const exento = lectura.campos.exento?.valor === true;
+      const nuevoExento = porEscribir.find((w) => w.campo === 'exento')?.valor;
+      const exento =
+        typeof nuevoExento === 'boolean' ? nuevoExento : lectura.campos.exento?.valor === true;
       for (const w of porEscribir) {
         if (w.campo === 'nombre' && typeof w.valor === 'string') cambios.nombre = w.valor;
         if (w.campo === 'precio' && typeof w.valor === 'number') {
@@ -508,6 +518,16 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
           cambios.tipo = w.valor;
         }
         if (w.campo === 'categoria' && typeof w.valor === 'string') cambios.categoria = w.valor;
+        if (w.campo === 'exento' && typeof w.valor === 'boolean') cambios.exento = w.valor;
+      }
+      // El neto depende de la exención: al cambiarla se manda el neto que conserva el bruto.
+      const bruto = p.canonico.precio?.valor;
+      if (
+        cambios.exento !== undefined &&
+        cambios.precioNeto === undefined &&
+        typeof bruto === 'number'
+      ) {
+        cambios.precioNeto = netoEmite(p, bruto, exento);
       }
       carga = cambios;
       escribir = () => d.emite.actualizarProducto(lectura.idExterno, cambios);
@@ -535,6 +555,22 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       sistema,
       campos: porEscribir.map((w) => w.campo),
     });
+  };
+
+  /**
+   * Un alta aprobada no espera a una web sin configurar o fuera de `PRODUCTOS_ESCRIBIR_SISTEMAS`:
+   * se cierra al existir en Coreinbox y Emite DTE, y cuando la web se encienda el producto es un
+   * aprobado que falta allá y se crea por el camino de siempre.
+   */
+  const webCuenta = d.sistemas.includes('woocommerce') && d.woocommerce !== null;
+  const cerrarAlta = (p: ProductoCatalogo): boolean => {
+    if (webCuenta || !registro.alta(p.sku)) return false;
+    const requeridos = p.alcance.filter((s) => s !== 'woocommerce');
+    if (!requeridos.every((s) => p.presentes.includes(s))) return false;
+    registro.quitarAlta(p.sku);
+    log('info', 'el alta del panel ya está en su alcance sin la web', { sku: p.sku });
+    recalcular(registro, p.sku);
+    return true;
   };
 
   // --- Por SKU ---
@@ -565,6 +601,7 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
     if (p.crearEn?.includes('woocommerce') && habilitado('woocommerce')) await crearEnWeb(p);
     recalcular(registro, sku);
     p = registro.producto(sku) ?? p;
+    if (cerrarAlta(p)) p = registro.producto(sku) ?? p;
 
     for (const sistema of ['coreinbox', 'woocommerce', 'emite'] as const) {
       const plan = (p.escrituras ?? []).filter((w) => w.sistema === sistema);

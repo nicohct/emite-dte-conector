@@ -166,8 +166,15 @@ describe('alta desde el panel', () => {
       unitPrice: 30000,
       currencyCode: 'CLP',
       isTaxable: false,
-      isActive: false,
     });
+    // Coreinbox no acepta `isActive` al crear: se desactiva enseguida con un PATCH.
+    expect(m.escrituras).toContainEqual({
+      sistema: 'coreinbox',
+      metodo: 'PATCH',
+      ruta: '/api/v1/products/ci-SRV-1',
+      cuerpo: { isActive: false },
+    });
+    expect(coreinboxDe(m.mundo, 'ci-SRV-1')?.isActive).toBe(false);
     expect(enEmite?.cuerpo).toMatchObject({ tipo: 'servicio', exento: true, activo: false });
     const [evento] = m.estado.catalogo
       .eventosDeSku('SRV-1')
@@ -175,6 +182,23 @@ describe('alta desde el panel', () => {
     expect(evento?.mensaje).toContain('sin categoría: «Servicios» no existe en Coreinbox');
     expect(m.estado.catalogo.alta('SRV-1')).toBeNull();
     expect(m.estado.catalogo.producto('SRV-1')?.canonico.activo?.valor).toBe(false);
+  });
+
+  it('aprobada sin la web configurada, se cierra al existir en Coreinbox y Emite DTE', async () => {
+    const m = await leido();
+    m.d.woocommerce = null;
+    m.d.escribir = true;
+    alta(m, CODO);
+    await m.pasada();
+    const r = m.estado.catalogo;
+    expect(r.alta('SKU-100')).toBeNull();
+    expect(r.producto('SKU-100')).toMatchObject({
+      presentes: ['coreinbox', 'emite'],
+      visibilidadWeb: 'aprobado',
+      faltaEn: ['woocommerce'],
+      crearEn: ['woocommerce'],
+    });
+    expect(r.producto('SKU-100')?.pendiente).toBeUndefined();
   });
 
   it('en una categoría fuera de la web nace rechazado, salvo que el alta lo apruebe', async () => {
@@ -210,6 +234,7 @@ describe('alta desde el panel', () => {
     expect(rechazo({ nombre: 'Producto  sin código' })).toThrow(
       '«Producto sin código» ya existe sin SKU en Coreinbox: ponle el SKU SKU-100 ahí en vez de crearlo',
     );
+    expect(rechazo({ sku: 'nuevo' })).toThrow('el SKU «nuevo» está reservado por el panel');
     expect(rechazo({ sku: 'ANT-003' })).toThrow(
       'Emite DTE tiene un histórico con el código ANT-003: confirma el empate desde Históricos en vez de crearlo',
     );
@@ -346,16 +371,55 @@ describe('edición desde el panel', () => {
       valor: 'Válvula de la web',
       fuente: 'woocommerce',
     });
+    // Queda a la vista en Eventos, con quién la había hecho.
+    const descartadas = m.estado
+      .eventos({ flujo: 'productos', estado: 'descartada' })
+      .filter((e) => e.tipo === 'accion');
+    expect(descartadas).toMatchObject([
+      { sku: 'SKU-001', mensaje: `SKU-001 · nombre · ${ANA}`, en: EN },
+    ]);
+  });
+
+  it('una edición de tipo va a Coreinbox, que manda, y de ahí a Emite DTE y a la web', async () => {
+    const m = await escrito();
+    edicion(m, 'SKU-001', { tipo: 'servicio' });
+    await m.pasada();
+    expect(coreinboxDe(m.mundo, 'c1')?.type).toBe('service');
+    expect(emiteDe(m.mundo, 'e5')?.tipo).toBe('bien');
+    await m.pasada();
+    expect(emiteDe(m.mundo, 'e5')?.tipo).toBe('servicio');
+    // Un servicio nunca va a la web: pasa a borrador.
+    expect(webDe(m.mundo, 11)?.status).toBe('draft');
+    expect(m.estado.catalogo.pendientes('SKU-001')).toEqual([]);
+  });
+
+  it('una edición de exento va a Emite DTE con el neto que conserva el bruto', async () => {
+    const m = await escrito();
+    edicion(m, 'SKU-001', { exento: true });
+    const marca = m.escrituras.length;
+    await m.pasada();
+    expect(m.escrituras.slice(marca)).toEqual([
+      {
+        sistema: 'emite',
+        metodo: 'PATCH',
+        ruta: '/api/v1/productos/e5',
+        cuerpo: { exento: true, precioNeto: 5000 },
+      },
+    ]);
+    const otra = m.escrituras.length;
+    await m.pasada();
+    expect(m.escrituras.slice(otra)).toEqual([]);
+    expect(m.estado.catalogo.pendientes('SKU-001')).toEqual([]);
+    expect(m.estado.catalogo.producto('SKU-001')).toMatchObject({ precioNeto: 5000 });
+    expect(m.estado.catalogo.producto('SKU-001')?.canonico.precio?.valor).toBe(5000);
   });
 
   it('rechaza el SKU, lo que el conector no escribe en quien manda y valores inválidos', async () => {
     const m = await escrito();
     const r = m.estado.catalogo;
-    expect(() => edicion(m, 'SKU-001', { tipo: 'servicio' })).toThrow(
-      '«tipo» lo manda Coreinbox y el conector no lo escribe ahí: cámbialo en Coreinbox',
-    );
-    expect(() => edicion(m, 'SKU-001', { exento: true })).toThrow(
-      '«exento» lo manda Emite DTE y el conector no lo escribe ahí: cámbialo en Emite DTE',
+    // SKU-006 está sólo en la web (y en Emite DTE, creado por la 1b): ahí el tipo lo da la web.
+    expect(() => edicion(m, 'SKU-006', { tipo: 'servicio' })).toThrow(
+      '«tipo» lo manda la web y el conector no lo escribe ahí: cámbialo en la web',
     );
     expect(() => edicion(m, 'SKU-001', { sku: 'SKU-999' })).toThrow('el SKU no se edita');
     expect(() => edicion(m, 'SKU-404', { precio: 1 })).toThrow('no existe el SKU SKU-404');
@@ -365,7 +429,7 @@ describe('edición desde el panel', () => {
       'no está entre las de Coreinbox',
     );
     // Una edición válida junto a una inválida no deja nada.
-    expect(() => edicion(m, 'SKU-001', { precio: 6000, tipo: 'servicio' })).toThrow();
+    expect(() => edicion(m, 'SKU-006', { precio: 6000, tipo: 'servicio' })).toThrow();
     expect(r.pendientes()).toEqual([]);
   });
 

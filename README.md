@@ -232,9 +232,10 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 
 - **Qué se escribe.** Por SKU y campo, el canónico (según el modo de [Quién manda](#modelo)) en cada
   sistema donde difiere, comparado en bruto el precio y sin espacios de más el nombre. Coreinbox
-  recibe nombre, precio neto (con su propia tasa), activo y categoría; la web, nombre, precio bruto y
-  estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo, tipo y
-  categoría. La exención no se escribe en ninguno. Un campo en conflicto no se escribe en ningún lado.
+  recibe nombre, precio neto (con su propia tasa), activo, tipo y categoría; la web, nombre, precio
+  bruto y estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo,
+  tipo, categoría y exención (manda en ella; al cambiarla recibe también el neto que conserva el
+  bruto). Un campo en conflicto no se escribe en ningún lado.
 - **Propietario.** Lo que cambie en otro sistema se revierte en la pasada siguiente y queda como evento
   `revertido`. Por ejemplo, despublicar en la web un producto activo en Coreinbox lo vuelve a publicar.
 - **Último cambio.** El último cambio que no sea eco se vuelve canónico y se escribe en los otros dos
@@ -498,23 +499,29 @@ las lleva a Coreinbox, la web y Emite DTE.
 - **Alta** (`/panel/productos/nuevo`, o «Nuevo producto» en la lista): SKU (1 a 35 caracteres, sin
   espacios en los extremos), nombre (hasta 80), precio bruto entero, tipo, categoría (de las de
   Coreinbox que el registro ya leyó; si todavía no leyó ninguna, se escribe a mano), exento, activo
-  y «Aprobar para la web». Se rechaza un SKU que ya existe, que ya tiene un alta pendiente o que es
+  y «Aprobar para la web». Se rechaza el SKU `nuevo` (reservado por la pantalla
+  `productos/nuevo`), un SKU que ya existe, que ya tiene un alta pendiente o que es
   el código exacto de un histórico de Emite DTE (ahí se confirma el empate desde **Históricos**), y
   un nombre que ya existe sin SKU en algún sistema (hay que ponerle el SKU allá). Un servicio no se
   aprueba para la web. Aprobarlo deja la decisión por SKU, aunque su categoría esté fuera de la web.
-  Se crea en Coreinbox y Emite DTE siempre, y en la web sólo si quedó aprobado.
+  Se crea en Coreinbox y Emite DTE siempre, y en la web sólo si quedó aprobado. Coreinbox no acepta
+  `isActive` al crear: un alta inactiva se crea y se desactiva enseguida con un `PATCH`.
 - **Edición** (en el detalle del SKU): nombre, precio, activo, tipo, categoría y exento, partiendo del
   valor canónico. En «último cambio» (nombre y precio) se escribe en los tres; en un campo con
-  propietario (activo y categoría van a Coreinbox) se escribe en el propietario y la pasada
-  siguiente lo propaga. Si quien manda es un sistema donde el conector no escribe ese campo (hoy:
-  `tipo` en Coreinbox y `exento` en Emite DTE), se rechaza y hay que cambiarlo allá. Una edición
+  propietario (activo, tipo y categoría van a Coreinbox; exento, a Emite DTE) se escribe en el
+  propietario y la pasada siguiente lo propaga. Si quien manda es un sistema donde el conector no
+  escribe ese campo (por ejemplo, el tipo de un producto que sólo está en la web), se rechaza y hay
+  que cambiarlo allá. Una edición
   sobre un campo en conflicto lo resuelve con ese valor. **El SKU no se edita**: un cambio de código
   se hace a mano en los tres sistemas.
 - **Pendiente.** Lo que nace o se edita en el panel queda **pendiente** en el hub (sección «Pendiente
   de escribir» del detalle, filtro «pendientes del panel» y marca en la lista) hasta que la pasada lo
-  deja en los sistemas: un alta, cuando el SKU existe en todo su alcance; una edición, cuando la
-  lectura trae ese valor en todos sus destinos. Desde ahí el producto vuelve a ser derivado de los
-  tres. Un cambio hecho en un sistema después de la edición la deja atrás. Con
+  deja en los sistemas: un alta, cuando el SKU existe en todo su alcance (la web cuenta sólo si
+  está configurada y en `PRODUCTOS_ESCRIBIR_SISTEMAS`; si no, al encenderla el producto es un
+  aprobado que falta allá y se crea por el camino de siempre); una edición, cuando la lectura trae
+  ese valor en todos sus destinos. Desde ahí el producto vuelve a ser derivado de los tres. Un
+  cambio hecho en un sistema después de la edición la deja atrás y queda como evento `accion`
+  `descartada` (SKU, campo y quién la hizo). Con
   `PRODUCTOS_ESCRIBIR=false` las pendientes se acumulan sin que nada salga del conector. Se
   respaldan con las decisiones, por si el hub se pierde entre el alta y la pasada.
 - Los **archivos** (foto principal, fichas, manuales) quedan para el PR 7b.
@@ -561,8 +568,6 @@ La última pasada y la última falla viven en memoria y se pierden al reiniciar.
 - Un workspace de Coreinbox ↔ un emisor de Emite DTE. Para más, una instancia por par.
 - El catálogo sólo crea en Coreinbox lo que nace en el panel. No sube archivos (PR 7b), no borra en
   ningún sistema ni cambia códigos.
-- Desde el panel no se edita `tipo` (Coreinbox manda y el conector no lo escribe ahí) ni `exento`
-  (Emite DTE manda y su API todavía no deja cambiarlo).
 - Un histórico adoptado sigue con `origen=historial` en Emite DTE: la API todavía no deja cambiarlo.
 - No lee las variaciones de los productos variables: sólo el SKU del padre.
 - No detecta los productos borrados en Coreinbox ni en la web: se quedan con su última lectura.

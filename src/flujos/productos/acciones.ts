@@ -49,6 +49,9 @@ export const NOMBRES_ACCIONES: readonly NombreAccion[] = [
   'edicion',
 ];
 
+/** `productos/nuevo` es la pantalla del alta: un producto con ese SKU quedaría tapado. */
+export const SKU_RESERVADO = 'nuevo';
+
 const NOMBRE_SISTEMA: Record<SistemaCatalogo, string> = {
   coreinbox: 'Coreinbox',
   woocommerce: 'la web',
@@ -285,6 +288,9 @@ export const ACCIONES: Record<NombreAccion, Accion> = {
     }
     if (sku !== sku.trim())
       throw new ErrorPeticion('el SKU no puede empezar ni terminar en espacio');
+    if (sku === SKU_RESERVADO) {
+      throw new ErrorPeticion(`el SKU «${SKU_RESERVADO}» está reservado por el panel`);
+    }
     const alta: AltaPendiente = {
       sku,
       nombre: validarCampo(registro, 'nombre', cuerpo.nombre) as string,

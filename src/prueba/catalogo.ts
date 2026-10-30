@@ -201,6 +201,10 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
   if (url.origin === CI) {
     const sobre = (data: unknown) => ({ success: true, data, meta: { timestamp: T2 } });
     if (metodo === 'POST' && ruta === '/api/v1/products') {
+      // Como el API real (`forbidNonWhitelisted`): `isActive` no está en `CreateProductDto`.
+      if ('isActive' in cuerpo) {
+        return respuesta({ success: false, error: { code: 'VALIDATION_ERROR' } }, 400);
+      }
       if (mundo.coreinbox.some((c) => c.sku === cuerpo.sku)) {
         return respuesta({ success: false, error: { code: 'SKU_DUPLICATED' } }, 409);
       }
@@ -212,7 +216,6 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
         isTaxable: cuerpo.isTaxable !== false,
         taxRate: cuerpo.isTaxable === false ? '0' : '0.19',
         categoryId: typeof cuerpo.categoryId === 'string' ? cuerpo.categoryId : null,
-        isActive: cuerpo.isActive !== false,
         unit: null,
         updatedAt: tic(mundo),
       });
@@ -227,6 +230,7 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
       if (typeof cuerpo.unitPrice === 'number') p.unitPrice = String(cuerpo.unitPrice);
       if (typeof cuerpo.isActive === 'boolean') p.isActive = cuerpo.isActive;
       if (cuerpo.categoryId !== undefined) p.categoryId = cuerpo.categoryId as string | null;
+      if (cuerpo.type === 'product' || cuerpo.type === 'service') p.type = cuerpo.type;
       p.updatedAt = tic(mundo);
       return respuesta(sobre(p));
     }
@@ -315,6 +319,7 @@ function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string,
       if (typeof cuerpo.activo === 'boolean') p.activo = cuerpo.activo;
       if (cuerpo.tipo === 'bien' || cuerpo.tipo === 'servicio') p.tipo = cuerpo.tipo;
       if (typeof cuerpo.categoria === 'string') p.categoria = cuerpo.categoria;
+      if (typeof cuerpo.exento === 'boolean') p.exento = cuerpo.exento;
       p.updatedAt = tic(mundo);
       return respuesta(p);
     }

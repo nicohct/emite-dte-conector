@@ -72,13 +72,14 @@ export const MODO_POR_OMISION: Record<CampoCatalogo, ModoCampo> = {
 export const CAMPOS_ULTIMO_CAMBIO: readonly CampoCatalogo[] = CAMPOS_COMPARTIDOS;
 
 /**
- * Lo que la escritura cambia en cada sistema. La exención no se escribe en ninguno (manda Emite
- * DTE y sólo sirve para el neto); en la web no hay tipo ni una categoría comparable.
+ * Lo que la escritura cambia en cada sistema. La exención sólo se escribe en Emite DTE, que manda
+ * en ella (junto con el neto que conserva el bruto); en la web no hay tipo ni una categoría
+ * comparable.
  */
 export const CAMPOS_ESCRIBIBLES: Record<SistemaCatalogo, readonly CampoCatalogo[]> = {
-  coreinbox: ['nombre', 'precio', 'activo', 'categoria'],
+  coreinbox: ['nombre', 'precio', 'activo', 'tipo', 'categoria'],
   woocommerce: ['nombre', 'precio', 'activo'],
-  emite: ['nombre', 'precio', 'activo', 'tipo', 'categoria'],
+  emite: ['nombre', 'precio', 'activo', 'tipo', 'categoria', 'exento'],
 };
 
 const CAMPOS_CANONICOS: CampoCatalogo[] = [
@@ -197,18 +198,21 @@ const presentesEn = (e: EntradaCanonico): SistemaCatalogo[] =>
  * Una edición queda atrás si después de hacerla un sistema que cuenta (en «último cambio»,
  * cualquiera; con propietario, el propietario) cambió el campo a otro valor.
  */
-function edicionSuperada(e: EntradaCanonico, ed: EdicionPendiente): boolean {
+function edicionSuperada(e: EntradaCanonico, ed: EdicionPendiente): string | null {
   const modo = modoDe(e.reglas, e.sku, ed.campo);
   const presentes = presentesEn(e);
   const cuentan = modo.modo === 'ultimo' ? presentes : [duenoDe(modo, presentes)];
-  return cuentan.some((s) => {
+  for (const s of cuentan) {
     const c = s ? e.lecturas[s]?.campos[ed.campo] : undefined;
-    return (
+    if (
       c?.cambioEn != null &&
       Date.parse(c.cambioEn) > Date.parse(ed.en) &&
       !igualesEn(ed.campo, c.valor, ed.valor)
-    );
-  });
+    ) {
+      return c.cambioEn;
+    }
+  }
+  return null;
 }
 
 function valorDeAlta(a: AltaPendiente, campo: CampoCatalogo): ValorCampo {
@@ -223,18 +227,31 @@ function valorDeAlta(a: AltaPendiente, campo: CampoCatalogo): ValorCampo {
 }
 
 /**
- * Las ediciones que ya no hace falta guardar: las que quedaron atrás y las que ya están en todos
- * sus destinos (la pasada no tiene nada que escribir de ese campo ahí). Con un alta no se cierra
- * ninguna: el alta manda hasta que el producto existe en todo su alcance.
+ * Las ediciones que ya no hace falta guardar: las que quedaron atrás (`descartadaEn`, la hora en
+ * que se vio el cambio que les ganó) y las que ya están en todos sus destinos (la pasada no tiene
+ * nada que escribir de ese campo ahí). Con un alta no se cierra ninguna: el alta manda hasta que el
+ * producto existe en todo su alcance.
  */
-export function pendientesCerradas(e: EntradaCanonico, p: ProductoCatalogo): EdicionPendiente[] {
+export function pendientesCerradas(
+  e: EntradaCanonico,
+  p: ProductoCatalogo,
+): Array<{ edicion: EdicionPendiente; descartadaEn: string | null }> {
   if (e.alta) return [];
-  return (e.ediciones ?? []).filter((ed) => {
-    if (edicionSuperada(e, ed)) return true;
-    if (p.canonico[ed.campo]?.conflicto) return false;
+  const r: Array<{ edicion: EdicionPendiente; descartadaEn: string | null }> = [];
+  for (const ed of e.ediciones ?? []) {
+    const superada = edicionSuperada(e, ed);
+    if (superada) {
+      r.push({ edicion: ed, descartadaEn: superada });
+      continue;
+    }
+    if (p.canonico[ed.campo]?.conflicto) continue;
     const destinos = destinosEdicion(e.reglas, e.sku, ed.campo, p.presentes);
-    return !(p.escrituras ?? []).some((w) => w.campo === ed.campo && destinos.includes(w.sistema));
-  });
+    const falta = (p.escrituras ?? []).some(
+      (w) => w.campo === ed.campo && destinos.includes(w.sistema),
+    );
+    if (!falta) r.push({ edicion: ed, descartadaEn: null });
+  }
+  return r;
 }
 
 /** Publicado en la web: `publish` y no oculto del catálogo. */

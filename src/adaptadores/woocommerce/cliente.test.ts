@@ -246,6 +246,25 @@ describe('WooCommerce: peticiones', () => {
     expect(peticiones[0]?.cuerpo).toEqual({ regular_price: '1500' });
   });
 
+  it('crearProducto hace POST con nombre, SKU, precio bruto y estado', async () => {
+    const { http, peticiones } = doble(json(producto(31, { sku: 'S-1' }), 201));
+    const woo = new WooCommerce(CONFIG, http);
+    const datos = {
+      name: 'Nuevo',
+      sku: 'S-1',
+      type: 'simple' as const,
+      regular_price: '1000',
+      status: 'draft' as const,
+    };
+
+    const creado = await woo.crearProducto(datos);
+
+    expect(creado.id).toBe(31);
+    expect(peticiones[0]?.metodo).toBe('POST');
+    expect(peticiones[0]?.url.pathname).toBe('/wp-json/wc/v3/products');
+    expect(peticiones[0]?.cuerpo).toEqual(datos);
+  });
+
   it('rechaza ids que no son enteros positivos sin llamar a la red', async () => {
     const { http, peticiones } = doble(json({}));
     const woo = new WooCommerce(CONFIG, http);

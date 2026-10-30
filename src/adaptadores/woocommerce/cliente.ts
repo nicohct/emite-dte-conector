@@ -9,6 +9,7 @@ import type {
   ConfigWoo,
   NotaPedidoWoo,
   PedidoWoo,
+  ProductoNuevoWoo,
   ProductoWoo,
 } from './tipos.js';
 
@@ -181,6 +182,10 @@ export class WooCommerce {
   /** URL de una categoría de productos en la API REST. */
   urlCategoria(id: number): string {
     return `${this.base}/products/categories/${id}`;
+  }
+
+  async crearProducto(datos: ProductoNuevoWoo): Promise<ProductoWoo> {
+    return (await this.pedir<ProductoWoo>('POST', '/products', datos)).data;
   }
 
   async actualizarProducto(id: number, cambios: CambiosProductoWoo): Promise<ProductoWoo> {

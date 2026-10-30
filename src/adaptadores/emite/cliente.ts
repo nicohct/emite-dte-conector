@@ -121,10 +121,16 @@ export interface ProductoNuevo {
   precioNeto: number;
   exento?: boolean;
   categoria?: string;
+  activo?: boolean;
 }
 
-/** Lo único que el conector cambia en un producto que ya existe en Emite DTE. */
-export type CambiosProducto = Partial<Pick<ProductoNuevo, 'nombre' | 'precioNeto'>>;
+/**
+ * Lo único que el conector cambia en un producto que ya existe en Emite DTE (`PATCH`). Nunca el
+ * código ni el origen.
+ */
+export type CambiosProducto = Partial<
+  Pick<ProductoNuevo, 'nombre' | 'precioNeto' | 'tipo' | 'categoria'> & { activo: boolean }
+>;
 
 export class ErrorEmite extends Error {
   constructor(
@@ -186,7 +192,10 @@ export class EmiteDte {
     return { items: r.data, siguiente: r.next_cursor ?? null };
   }
 
-  /** `POST /productos/fusionar`. No se deshace; el catálogo de la fase 1a no lo llama. */
+  /**
+   * `POST /productos/fusionar`. No se deshace. Rechaza con `PRODUCTO_CON_INVENTARIO` un origen que
+   * controla stock o tiene movimientos.
+   */
   fusionarProductos(fusion: Fusion): Promise<ResultadoFusion> {
     return this.pedir<ResultadoFusion>('POST', '/productos/fusionar', fusion);
   }

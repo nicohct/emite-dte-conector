@@ -2,7 +2,8 @@
  * Cliente de la API de Coreinbox con clave `cik_…` (docs/api-claves.md del CRM). Sólo lo que el
  * conector necesita: cotizaciones aceptadas desde una fecha, su detalle, la empresa, el contacto,
  * el producto (por el SKU o completo), los productos cambiados desde una fecha con sus categorías,
- * editar un producto (sólo la fase 1b del catálogo lo usa) y anotar actividades en el negocio.
+ * crear y editar un producto (la escritura del catálogo; alcance `products:write`) y anotar
+ * actividades en el negocio.
  */
 
 export interface PaginaCotizaciones {
@@ -115,9 +116,25 @@ export interface ProductoCoreinbox {
 /** Cuerpo de `PATCH /products/:id` (`UpdateProductDto`); sólo lo que el catálogo puede cambiar. */
 export type CambiosProductoCoreinbox = Partial<{
   name: string;
+  /** Neto en la moneda del producto. */
   unitPrice: number;
   isActive: boolean;
+  categoryId: string | null;
 }>;
+
+/**
+ * Cuerpo de `POST /products` (`CreateProductDto`): sólo lo que el catálogo lee. Sin listas de
+ * precios. El catálogo no lo usa todavía: la fase 1c decide si el hub llega a crear en Coreinbox.
+ */
+export interface ProductoNuevoCoreinbox {
+  name: string;
+  sku: string;
+  type: 'product' | 'service';
+  unitPrice: number;
+  currencyCode: 'CLP';
+  isTaxable?: boolean;
+  categoryId?: string | null;
+}
 
 export interface CategoriaCoreinbox {
   id: string;
@@ -228,7 +245,12 @@ export class Coreinbox {
     return (await this.pedir<ProductoCoreinbox>('GET', `/products/${encodeURIComponent(id)}`)).data;
   }
 
-  /** `PATCH /products/:id`. El catálogo de la fase 1a no lo llama: sólo lee. */
+  /** `POST /products` (alcance `products:write`). */
+  async crearProducto(datos: ProductoNuevoCoreinbox): Promise<ProductoCoreinbox> {
+    return (await this.pedir<ProductoCoreinbox>('POST', '/products', datos)).data;
+  }
+
+  /** `PATCH /products/:id` (alcance `products:write`). */
   async actualizarProducto(
     id: string,
     cambios: CambiosProductoCoreinbox,

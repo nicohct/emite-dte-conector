@@ -83,6 +83,25 @@ describe('Coreinbox: actualizarProducto', () => {
   });
 });
 
+describe('Coreinbox: crearProducto', () => {
+  it('manda un POST con lo mínimo del catálogo', async () => {
+    const { http, peticiones } = doble(sobre(producto('id-9', { sku: 'S-1' })));
+    const datos = {
+      name: 'Nuevo',
+      sku: 'S-1',
+      type: 'product' as const,
+      unitPrice: 840.34,
+      currencyCode: 'CLP' as const,
+    };
+    const r = await new Coreinbox(BASE, 'cik_prueba', http).crearProducto(datos);
+
+    expect(r.id).toBe('id-9');
+    expect(peticiones[0]?.metodo).toBe('POST');
+    expect(peticiones[0]?.url.pathname).toBe('/api/v1/products');
+    expect(peticiones[0]?.cuerpo).toEqual(datos);
+  });
+});
+
 describe('Coreinbox: URLs', () => {
   it('urlImagen apunta a la imagen del producto', () => {
     const ci = new Coreinbox(BASE, 'cik_prueba', doble(sobre({})).http);

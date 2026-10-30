@@ -1,8 +1,8 @@
 /**
  * Cliente de la API de Coreinbox con clave `cik_…` (docs/api-claves.md del CRM). Sólo lo que el
  * conector necesita: cotizaciones aceptadas desde una fecha, su detalle, la empresa, el contacto,
- * el producto (por el SKU), los productos cambiados desde una fecha con sus categorías, y anotar
- * actividades en el negocio.
+ * el producto (por el SKU o completo), los productos cambiados desde una fecha con sus categorías,
+ * editar un producto (sólo la fase 1b del catálogo lo usa) y anotar actividades en el negocio.
  */
 
 export interface PaginaCotizaciones {
@@ -107,8 +107,17 @@ export interface ProductoCoreinbox {
   taxRate: string | number | null;
   categoryId: string | null;
   isActive: boolean;
+  /** Clave de la imagen en el almacenamiento de Coreinbox; la imagen se baja por `/products/:id/image`. */
+  imageStorageKey?: string | null;
   updatedAt: string;
 }
+
+/** Cuerpo de `PATCH /products/:id` (`UpdateProductDto`); sólo lo que el catálogo puede cambiar. */
+export type CambiosProductoCoreinbox = Partial<{
+  name: string;
+  unitPrice: number;
+  isActive: boolean;
+}>;
 
 export interface CategoriaCoreinbox {
   id: string;
@@ -214,6 +223,31 @@ export class Coreinbox {
     };
   }
 
+  /** `GET /products/:id`: el producto completo (tipo, categoría, imagen). */
+  async producto(id: string): Promise<ProductoCoreinbox> {
+    return (await this.pedir<ProductoCoreinbox>('GET', `/products/${encodeURIComponent(id)}`)).data;
+  }
+
+  /** `PATCH /products/:id`. El catálogo de la fase 1a no lo llama: sólo lee. */
+  async actualizarProducto(
+    id: string,
+    cambios: CambiosProductoCoreinbox,
+  ): Promise<ProductoCoreinbox> {
+    return (
+      await this.pedir<ProductoCoreinbox>('PATCH', `/products/${encodeURIComponent(id)}`, cambios)
+    ).data;
+  }
+
+  /** URL de la imagen del producto en la API (pide la clave para bajarla). */
+  urlImagen(id: string): string {
+    return `${this.base}/api/v1/products/${encodeURIComponent(id)}/image`;
+  }
+
+  /** URL del producto en la API. */
+  urlProducto(id: string): string {
+    return `${this.base}/api/v1/products/${encodeURIComponent(id)}`;
+  }
+
   async categorias(): Promise<CategoriaCoreinbox[]> {
     return (await this.pedir<CategoriaCoreinbox[]>('GET', '/products/categories')).data;
   }
@@ -227,7 +261,7 @@ export class Coreinbox {
   }
 
   private async pedir<T>(
-    metodo: 'GET' | 'POST',
+    metodo: 'GET' | 'POST' | 'PATCH',
     ruta: string,
     cuerpo?: unknown,
   ): Promise<Sobre<T>> {

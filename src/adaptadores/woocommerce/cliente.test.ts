@@ -427,3 +427,17 @@ describe('configWooDesdeEnv', () => {
     });
   });
 });
+
+describe('WooCommerce: URLs de la API', () => {
+  const woo = new WooCommerce(CONFIG, doble(json([])).http);
+
+  it('urlProducto apunta al producto', () => {
+    expect(woo.urlProducto(7)).toBe('https://tienda.example.com/wp-json/wc/v3/products/7');
+  });
+
+  it('urlCategoria apunta a la categoría', () => {
+    expect(woo.urlCategoria(3)).toBe(
+      'https://tienda.example.com/wp-json/wc/v3/products/categories/3',
+    );
+  });
+});

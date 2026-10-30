@@ -82,3 +82,30 @@ describe('leerConfig: WooCommerce', () => {
     ).toThrow(/https/i);
   });
 });
+
+describe('leerConfig: catálogo', () => {
+  it('PRODUCTOS_ESCRIBIR viene apagado por omisión', () => {
+    expect(leerConfig({ ...BASE }).productos.escribir).toBe(false);
+  });
+
+  it('PRODUCTOS_ESCRIBIR=true lo enciende', () => {
+    expect(leerConfig({ ...BASE, PRODUCTOS_ESCRIBIR: 'true' }).productos.escribir).toBe(true);
+  });
+
+  it('un valor inválido en PRODUCTOS_ESCRIBIR falla al arrancar', () => {
+    expect(() => leerConfig({ ...BASE, PRODUCTOS_ESCRIBIR: 'quizas' })).toThrow(
+      /PRODUCTOS_ESCRIBIR/,
+    );
+  });
+
+  it('CATALOGO_API_KEY ausente o en blanco queda en null', () => {
+    expect(leerConfig({ ...BASE }).catalogoApiKey).toBeNull();
+    expect(leerConfig({ ...BASE, CATALOGO_API_KEY: '   ' }).catalogoApiKey).toBeNull();
+  });
+
+  it('CATALOGO_API_KEY se recorta', () => {
+    expect(leerConfig({ ...BASE, CATALOGO_API_KEY: '  clave_prueba  ' }).catalogoApiKey).toBe(
+      'clave_prueba',
+    );
+  });
+});

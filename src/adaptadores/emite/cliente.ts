@@ -58,6 +58,52 @@ export interface ProductoEmite {
   exento: boolean;
   categoria: string | null;
   activo: boolean;
+  /** `manual`, `csv` o `historial` (importado del historial del SII). */
+  origen?: OrigenProductoEmite;
+  /** Producto que lo absorbió al fusionar; el absorbido queda inactivo y como alias. */
+  fusionadoEnId?: string | null;
+  /** Último cambio; es lo que ordena `orden=reciente`. */
+  updatedAt?: string;
+  /** Sólo en los listados: cuánto se usó en documentos emitidos o importados. */
+  uso?: UsoProductoEmite;
+}
+
+export type OrigenProductoEmite = 'manual' | 'csv' | 'historial';
+
+export interface UsoProductoEmite {
+  documentos: number;
+  cantidad: number;
+  ultimaVez: string | null;
+  clientes: number;
+}
+
+export interface FiltroProductosEmite {
+  emisorId: string;
+  origen?: OrigenProductoEmite;
+  /** `reciente` es el último cambio primero. */
+  orden?: 'nombre' | 'codigo' | 'precio' | 'reciente';
+  /** Por omisión Emite DTE lista sólo los activos; el catálogo pide `todos`. */
+  activo?: 'true' | 'false' | 'todos';
+  cursor?: string;
+  limite?: number;
+}
+
+export interface PaginaProductosEmite {
+  items: ProductoEmite[];
+  siguiente: string | null;
+}
+
+/** Cuerpo de `POST /productos/fusionar`: las líneas de los orígenes pasan al destino. */
+export interface Fusion {
+  emisorId: string;
+  destinoId: string;
+  origenIds: string[];
+}
+
+export interface ResultadoFusion {
+  destino: ProductoEmite;
+  fusionados: number;
+  lineasReapuntadas: number;
 }
 
 /** Cuerpo de `POST /productos` (`productos.schemas.ts` de Emite DTE). */
@@ -121,6 +167,33 @@ export class EmiteDte {
       if (e instanceof ErrorEmite && e.status === 404) return null;
       throw e;
     }
+  }
+
+  /** `GET /productos` con su `uso`, paginado por cursor (`{ data, next_cursor }`). */
+  async listarProductos(filtro: FiltroProductosEmite): Promise<PaginaProductosEmite> {
+    const q = new URLSearchParams({
+      emisorId: filtro.emisorId,
+      limit: String(filtro.limite ?? 100),
+    });
+    if (filtro.origen) q.set('origen', filtro.origen);
+    if (filtro.orden) q.set('orden', filtro.orden);
+    if (filtro.activo) q.set('activo', filtro.activo);
+    if (filtro.cursor) q.set('cursor', filtro.cursor);
+    const r = await this.pedir<{ data: ProductoEmite[]; next_cursor?: string | null }>(
+      'GET',
+      `/productos?${q}`,
+    );
+    return { items: r.data, siguiente: r.next_cursor ?? null };
+  }
+
+  /** `POST /productos/fusionar`. No se deshace; el catálogo de la fase 1a no lo llama. */
+  fusionarProductos(fusion: Fusion): Promise<ResultadoFusion> {
+    return this.pedir<ResultadoFusion>('POST', '/productos/fusionar', fusion);
+  }
+
+  /** URL del producto en la API. */
+  urlProducto(id: string): string {
+    return `${this.base}/api/v1/productos/${encodeURIComponent(id)}`;
   }
 
   crearProducto(datos: ProductoNuevo): Promise<ProductoEmite> {

@@ -41,7 +41,7 @@ const MAX_LOTE = 500;
 
 let configurado: DependenciasCatalogoApi | null = null;
 
-/** Lo llama `index.ts` al arrancar; `servidor.ts` sólo monta `atenderCatalogo`. */
+/** Lo llama `index.ts` al arrancar, que monta `atenderCatalogo` en las rutas del servidor. */
 export function configurarCatalogo(d: DependenciasCatalogoApi | null): void {
   configurado = d;
 }

@@ -5,7 +5,7 @@ import { leerConfig } from './config.js';
 import { Estado } from './estado.js';
 import { esTransitorio } from './flujos/comun.js';
 import { pasada } from './flujos/cotizaciones/pasada.js';
-import { configurarCatalogo } from './flujos/productos/api.js';
+import { atenderCatalogo, configurarCatalogo } from './flujos/productos/api.js';
 import { pasadaCatalogo } from './flujos/productos/catalogo.js';
 import { log } from './log.js';
 import { crearPanel } from './panel/index.js';
@@ -36,6 +36,7 @@ const servidor = crearServidor(
       estadoRuta: config.estadoRuta,
       enlaces: { emite: config.emite.urlPublica },
     }),
+    atenderCatalogo,
   ],
 );
 servidor.listen(config.puerto, () =>

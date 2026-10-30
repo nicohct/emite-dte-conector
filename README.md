@@ -54,13 +54,13 @@ src/
 
 Las pruebas (`*.test.ts`) están junto al código que prueban y no aparecen en el árbol.
 
-| Flujo                             | Sentido                                   | Variable                                                        | Estado                                                                                 |
-| --------------------------------- | ----------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| A · Cotizaciones aceptadas        | Coreinbox → Emite DTE → Coreinbox         | `FLUJO_COTIZACIONES` (encendido por omisión)                    | En producción                                                                          |
-| B · Pedidos web                   | WooCommerce → Emite DTE → WooCommerce     | `FLUJO_PEDIDOS` (sin implementar: encendido sólo deja un aviso) | Planificado, enero de 2027                                                             |
-| C · Productos transversales       | entre los tres, registro canónico por SKU | `FLUJO_PRODUCTOS` (apagado por omisión)                         | Fase 1a: lectura y registro canónico. Fase 1b (escritura, fusiones): noviembre de 2026 |
-| D · Solicitudes de cotización web | WooCommerce → Coreinbox                   | —                                                               | Por evaluar frente al lector de correo de Coreinbox                                    |
-| E · Panel                         | —                                         | —                                                               | Flujos, eventos, productos y decisiones del catálogo (sólo el registro hasta la 1b)    |
+| Flujo                             | Sentido                                   | Variable                                                        | Estado                                                                                  |
+| --------------------------------- | ----------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| A · Cotizaciones aceptadas        | Coreinbox → Emite DTE → Coreinbox         | `FLUJO_COTIZACIONES` (encendido por omisión)                    | En producción                                                                           |
+| B · Pedidos web                   | WooCommerce → Emite DTE → WooCommerce     | `FLUJO_PEDIDOS` (sin implementar: encendido sólo deja un aviso) | Planificado, enero de 2027                                                              |
+| C · Productos transversales       | entre los tres, registro canónico por SKU | `FLUJO_PRODUCTOS` (apagado por omisión)                         | Fase 1a: lectura y registro canónico. Fase 1b: escritura con eco, conflictos y fusiones |
+| D · Solicitudes de cotización web | WooCommerce → Coreinbox                   | —                                                               | Por evaluar frente al lector de correo de Coreinbox                                     |
+| E · Panel                         | —                                         | —                                                               | Flujos, eventos, productos y decisiones del catálogo                                    |
 
 El plan completo está en `docs/10-conector-hub.md` del repositorio de Emite DTE.
 
@@ -85,8 +85,8 @@ El plan completo está en `docs/10-conector-hub.md` del repositorio de Emite DTE
    correspondiente en el negocio, con el enlace al PDF.
 5. Con `FLUJO_PRODUCTOS=true`, en la misma pasada lee los **productos** de Coreinbox, de la web
    WooCommerce y de Emite DTE, y arma el registro canónico por SKU (ver
-   [Catálogo de productos](#catálogo-de-productos)). Con `PRODUCTOS_ESCRIBIR=true` lleva además
-   Coreinbox → Emite DTE, como antes.
+   [Catálogo de productos](#catálogo-de-productos)). Con `PRODUCTOS_ESCRIBIR=true` además escribe
+   el canónico en los tres (o en los de `PRODUCTOS_ESCRIBIR_SISTEMAS`).
 
 **Idempotencia.** Repetir una pasada es inocuo: Emite DTE devuelve la cotización existente ante el
 mismo `origen` + `idExterno`, y el conector recuerda lo que ya pasó. Una versión nueva de la
@@ -104,10 +104,11 @@ Flujo C, apagado por omisión (`FLUJO_PRODUCTOS=false`). `SINCRONIZAR_PRODUCTOS=
 como alias obsoleto de `FLUJO_PRODUCTOS` y deja un aviso en el log al arrancar; si están las dos, manda
 `FLUJO_PRODUCTOS`.
 
-Desde la fase 1a del hub, encendido **sólo lee** los tres sistemas (Coreinbox, la web WooCommerce y
-Emite DTE) y arma un **registro canónico por SKU** en el SQLite del conector. No escribe en ningún
-sistema mientras `PRODUCTOS_ESCRIBIR=false` (por omisión). La escritura en los tres, con eco y
-conflictos, y las fusiones son la fase 1b.
+Encendido, lee los tres sistemas (Coreinbox, la web WooCommerce y Emite DTE) y arma un **registro
+canónico por SKU** en el SQLite del conector (fase 1a). No escribe en ningún sistema mientras
+`PRODUCTOS_ESCRIBIR=false` (por omisión). Con `PRODUCTOS_ESCRIBIR=true`, después de leer lleva el
+canónico a los sistemas, con eco, conflictos y fusiones de históricos (fase 1b, ver
+[Escritura](#escritura-productos_escribirtrue)).
 
 ### Lectura
 
@@ -138,24 +139,36 @@ Además se leen `tipo` (bien o servicio: `service`, `license` y `subscription` s
 `categoria` y `exento`.
 
 Por SKU se guarda: el id en cada sistema; la última versión leída de cada campo, con la hora en que se
-vio; la marca «lo escribí yo» (vacía en la 1a); el canónico con su fuente; el tipo, el alcance, la
-visibilidad web, las diferencias, «falta en…», los conflictos, los empates y el índice.
+vio; la marca «lo escribí yo» (`escritoValor`, para reconocer el eco) y la hora del último cambio
+que no fue eco (`cambioEn`); el canónico con su fuente y su modo; el tipo, el alcance, la visibilidad
+web y su motivo, las diferencias, «falta en…», lo que la escritura haría (`escrituras`, `crearEn`),
+los conflictos, los empates y el índice.
 
-- **Quién manda (regla de arranque).** La web manda en precio y nombre comercial; Coreinbox, en tipo,
-  categoría, activo y exención. Si la fuente preferida no tiene el dato, manda la otra. Se ajusta por
-  campo, para todo el catálogo o en lote por SKU, desde el panel.
-- **Visibilidad web.** `no_aplica` (los servicios nunca van a la web); `aprobado` (lo publicado hoy en
-  la web arranca así); `propuesto` (todo lo demás, repuestos incluidos); `rechazado` (decisión del
-  panel).
+- **Quién manda.** Cada campo tiene un modo. **Propietario**: un sistema manda y lo que cambie otro se
+  revierte en la pasada siguiente. **Último cambio**: gana el último cambio que no sea eco y se
+  escribe en los otros. Por omisión, `activo`, `tipo` y `categoria` son de Coreinbox (si Coreinbox no
+  tiene el producto, de la web); `exento` es de Emite DTE (sin Emite DTE, de Coreinbox); `nombre` y
+  `precio` van por último cambio. Antes de la primera escritura rige la **regla de arranque**: en
+  nombre y precio manda la web y, sin web, Coreinbox. Desde el panel se fija otro propietario o
+  «último cambio» (sólo en nombre, precio y activo), para todo el catálogo o en lote por SKU.
+- **Visibilidad web.** `no_aplica` (los servicios nunca van a la web); si no, una decisión
+  (`aprobado` o `rechazado`) manda. Lo publicado hoy en la web arranca aprobado: cuando la lectura ve
+  un producto con `status: publish` y sin decisión, registra una decisión `aprobado` con usuario
+  `web` (se exporta con las demás). Sin decisión: un producto de una **categoría fuera de la web**
+  (lista de categorías de Coreinbox que se fija en el panel; pensada para los repuestos) queda
+  `rechazado` con motivo `categoria`; el resto, incluido un borrador en la tienda, es `propuesto`.
+  Una categoría fuera de la web nunca toca lo que tiene decisión, así que no despublica lo publicado.
 - **Alcance.** Servicio → Coreinbox y Emite DTE. Bien aprobado → los tres. El resto → Coreinbox y
   Emite DTE.
-- **Conflicto.** El mismo campo compartido cambiado en dos sistemas desde la pasada anterior, a valores
-  distintos. Queda abierto, con los valores y la hora de cada lado, hasta que alguien elija.
+- **Conflicto.** Un campo en «último cambio» cambiado en dos sistemas desde la pasada anterior, a
+  valores distintos (en un campo con propietario gana el propietario). Queda abierto, con los valores
+  y la hora de cada lado, hasta que alguien elija; mientras tanto ese campo no se escribe. Antes de la
+  primera escritura no se abren conflictos.
 - **Empates.** Para cada histórico se propone el mejor SKU, según el criterio que lo encontró: código
   exacto (1); alias que resuelve `por-codigo` (0,95); código sin signos ni mayúsculas (0,9); nombre
   normalizado igual (0,85); nombre parecido (0,8 × similitud, desde 0,6). Cada propuesta sale junto con
   el `uso` del histórico (documentos y última venta). Un empate rechazado no se vuelve a proponer.
-  Confirmar es una decisión del registro; fusionar en Emite DTE es de la 1b.
+  Confirmar es una decisión; la escritura lo lleva a Emite DTE (adoptar o fusionar).
 - **Índice de información.** Por SKU y sistema, enlaces con URL y hash SHA-256 de lo leído. Imágenes y
   documentos no se descargan:
   - Coreinbox: producto e imagen, y categoría.
@@ -165,9 +178,11 @@ visibilidad web, las diferencias, «falta en…», los conflictos, los empates y
 - **Sin SKU.** Los productos sin SKU de Coreinbox o de la web se listan aparte y no entran al registro.
 - **Reconstruibilidad.** Lo derivado (lecturas, canónico, históricos, empates propuestos, índice, sin
   SKU y cursores) se reconstruye igual leyendo los tres sistemas si se borra el SQLite; hay una prueba
-  que lo verifica. Las **decisiones** del panel (quién manda, empates confirmados o rechazados,
-  visibilidad, conflictos resueltos, bitácora con el usuario) viven en tablas aparte: son órdenes que la
-  1b llevará a los sistemas, y se pierden si se borra el archivo antes de eso.
+  que lo verifica. Lo operativo de la escritura (marcas de eco, hora de la primera escritura, bitácora
+  de escrituras) se pierde sin daño: a lo más, la pasada siguiente reescribe un valor igual. La única
+  excepción son las **decisiones** del panel (quién manda, empates confirmados o rechazados,
+  visibilidad, categorías fuera de la web, conflictos resueltos): viven en tablas aparte y se
+  respaldan con `GET /catalogo/decisiones` (ver [Respaldo de las decisiones](#respaldo-de-las-decisiones)).
 
 ### Lectura consolidada y acciones (JSON)
 
@@ -179,50 +194,111 @@ Están pensadas para la red interna y el panel.
   `historicos=true` (tiene empates propuestos). Con `vista=historicos` (y `estado=propuesto|confirmado|rechazado|sin_candidato`)
   lista los históricos con sus empates; con `vista=sin_sku` (y `sistema=`) lista los productos sin SKU.
   Responde `{ vista, pagina, limite, total, items }`.
-- `GET /catalogo/{sku}`: canónico, `precioNeto`, tipo, alcance, visibilidad, diferencias, `faltaEn`,
-  `sistemas` (id, valores, hora de cambio y de lectura de cada uno), reglas, conflictos, empates con su
-  histórico e `indice`.
+- `GET /catalogo/{sku}`: canónico (valor, fuente y modo), `precioNeto`, tipo, alcance, visibilidad y
+  `motivoVisibilidad`, diferencias, `faltaEn`, `escrituras` y `crearEn` (lo que la próxima escritura
+  haría), `sistemas` (id, valores, hora de cambio y de lectura de cada uno), reglas, conflictos,
+  empates con su histórico, `indice` y `eventos` (las últimas escrituras del SKU).
 - `POST /catalogo/acciones/reglas` con `{ campo, fuente, skus? }`. La fuente es `coreinbox`,
-  `woocommerce` o `emite`, o `null` para volver a la de arranque. Sin `skus`, aplica a todo el catálogo.
+  `woocommerce` o `emite` (propietario), `ultimo` (último cambio; sólo `nombre`, `precio` y
+  `activo`), o `null` para volver al modo por omisión. Sin `skus`, aplica a todo el catálogo.
 - `POST /catalogo/acciones/empates` con `{ decisiones: [{ emiteId, sku, estado: "confirmado"|"rechazado" }] }`.
-- `POST /catalogo/acciones/conflictos` con `{ resoluciones: [{ id, fuente }] }`: deja el valor de esa
-  fuente como regla del SKU y cierra el conflicto.
+- `POST /catalogo/acciones/conflictos` con `{ resoluciones: [{ id, fuente }] }`: el valor de esa fuente
+  pasa a ser el canónico y la escritura siguiente lo lleva a los otros. En «último cambio» el campo
+  sigue en ese modo; en uno con propietario, queda como regla del SKU.
 - `POST /catalogo/acciones/visibilidad` con `{ skus: [...], estado: "aprobado"|"rechazado" }`. Un
   servicio no se aprueba.
+- `POST /catalogo/acciones/categorias` con `{ categorias: ["…"], fuera: true|false }`: saca de la web
+  (o devuelve) categorías de Coreinbox, por nombre.
+- `GET /catalogo/decisiones` y `POST /catalogo/decisiones`: exportar e importar las decisiones (ver
+  [Respaldo de las decisiones](#respaldo-de-las-decisiones)).
 
 Las acciones responden `{ aplicadas, errores: [{ indice, error }] }`, procesan en lote (hasta 500) y
-registran la cabecera `X-Emite-Usuario`. En la 1a sólo cambian el registro; no escriben en los sistemas.
-El panel usa las mismas acciones desde sus formularios (ver «Panel»).
+registran la cabecera `X-Emite-Usuario`. Sólo cambian el registro: lo que implican en los sistemas lo
+lleva la pasada de escritura siguiente. El panel usa las mismas acciones desde sus formularios (ver
+«Panel»).
 
-### Escritura de antes (`PRODUCTOS_ESCRIBIR=true`)
+### Escritura (`PRODUCTOS_ESCRIBIR=true`)
 
-Con `PRODUCTOS_ESCRIBIR=true`, la escritura corre después de la pasada de lectura. Es el comportamiento
-de antes de la fase 1: un solo sentido, Coreinbox → Emite DTE. Se mantiene hasta la 1b.
+Con `PRODUCTOS_ESCRIBIR=true`, después de cada pasada de lectura corre la escritura (fase 1b). Reemplaza a
+la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura falla, no se escribe.
 
-- **Correspondencia.** El SKU de Coreinbox es el `codigo` de Emite DTE (35 caracteres). Un producto sin
-  SKU, con un SKU de más de 35 caracteres, en otra moneda, o inactivo que todavía no existe en Emite
-  DTE, queda omitido con aviso y se reintenta cuando cambie.
-- **Coreinbox manda.** En Emite DTE nunca se borra ni se desactiva nada: Coreinbox no informa borrados
-  por `updatedSince`, y desactivar un producto es una decisión de quien factura.
-- **Qué viaja al crear.** `codigo`, `nombre` (80 caracteres), `descripcion`, `tipo`, `unidad` (la sigla
-  SII de 4 caracteres; una desconocida se recorta), `precioNeto` (el `unitPrice` base, neto, a dos
-  decimales), `exento` y `categoria` (60 caracteres). Las listas de precios de Coreinbox no se miran.
-- **Si ya existe.** Si Emite DTE ya tiene ese código (como código, alias o producto fusionado; `por-codigo`
-  resuelve los tres casos), sólo se actualizan el nombre y el precio, y sólo cuando difieren. La
-  descripción, unidad, categoría, exención, inventario y estado activo se respetan como estén en Emite
-  DTE, y el código nunca cambia. Un precio nuevo queda en el historial, y un nombre nuevo deja el
-  anterior como alias.
-- **Idempotencia.** Antes de crear se busca por código. Un `409 PRODUCTO_DUPLICADO` (alguien lo creó
-  entre la consulta y el alta) se trata como existente.
-- **Errores.** Una falla de red o un 5xx deja el producto pendiente y no mueve el cursor de escritura.
-  Un 4xx queda registrado con su mensaje, se avisa una vez en el log y no bloquea a los demás. No se
-  anota nada en el CRM. Los contadores `sincronizados`, `omitidos` y `conError` de `GET /salud`
-  corresponden a esta escritura.
+- **Qué se escribe.** Por SKU y campo, el canónico (según el modo de [Quién manda](#modelo)) en cada
+  sistema donde difiere, comparado en bruto el precio y sin espacios de más el nombre. Coreinbox
+  recibe nombre, precio neto (con su propia tasa), activo y categoría; la web, nombre, precio bruto y
+  estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo, tipo y
+  categoría. La exención no se escribe en ninguno. Un campo en conflicto no se escribe en ningún lado.
+- **Propietario.** Lo que cambie en otro sistema se revierte en la pasada siguiente y queda como evento
+  `revertido`. Por ejemplo, despublicar en la web un producto activo en Coreinbox lo vuelve a publicar.
+- **Último cambio.** El último cambio que no sea eco se vuelve canónico y se escribe en los otros dos
+  (evento `escrito`). Si dos sistemas cambiaron el mismo campo entre pasadas, conflicto.
+- **Eco.** Cada escritura anota en el registro qué se escribió en ese sistema. La lectura siguiente que
+  trae ese valor lo reconoce como eco: no es un cambio y no se reescribe. Mientras un valor escrito no
+  se vuelve a leer, tampoco se manda de nuevo.
+- **Crear.** Lo que falte en Emite DTE y tenga fuente (Coreinbox o la web) se crea con el SKU como
+  código. No se crea si un histórico de Emite DTE ya usa ese código sin empate confirmado (queda un
+  aviso). En la web se crea sólo lo aprobado que falte: publicado si está activo, si no en borrador.
+  **En Coreinbox no se crea nada** (lo decide la fase 1c).
+- **Visibilidad.** Sólo lo `aprobado` se publica. Lo `rechazado` o `no_aplica` que ya está en la web
+  pasa a borrador. Nunca se borra nada de la web.
+- **Históricos.** Un empate confirmado cuyo histórico tiene **exactamente** el SKU como código se
+  **adopta**: recibe el nombre y el precio canónicos y pasa a ser el producto de Emite DTE de ese SKU
+  (evento `adoptado`; sigue con `origen=historial`, el núcleo todavía no deja cambiarlo). Con otro
+  código, se crea el canónico si falta y el histórico se **fusiona** en él (`POST /productos/fusionar`,
+  evento `fusionado`). Si hay varios con el código exacto, se adopta el de más uso y los demás se
+  fusionan en él. Si Emite DTE rechaza la fusión (por ejemplo, `PRODUCTO_CON_INVENTARIO`), el SKU queda
+  con el aviso «requiere mano» y no se reintenta mientras no se vuelva a decidir el empate. Un empate
+  rechazado no toca nada.
+- **Fallas.** Una falla de red, un 429 o un 5xx deja el SKU pendiente para la pasada siguiente y no se
+  le escribe más a ese sistema en esa pasada. Un 4xx queda como evento `error` con el mensaje, no
+  frena a los demás y no se reintenta con los mismos datos (sí cuando cambian).
+- **Nunca** se borra nada en ningún sistema ni se cambia un código.
 
-Alcances: `products:read` en la clave de Coreinbox; `catalogo:leer` en la API key de Emite DTE para
-leer, y `catalogo:escribir` sólo con la escritura. En WooCommerce basta el permiso de lectura para la 1a.
-La escritura arranca desde `DESDE`, como antes: con catálogos grandes conviene un `DESDE`
-antiguo y paciencia, o depurar antes los SKU en Coreinbox.
+**Primera escritura.** La primera pasada con `PRODUCTOS_ESCRIBIR=true` aplica la regla de arranque a
+todo lo que difiera (en nombre y precio, lo de la web) y desde ahí rige «último cambio»; los cambios
+vistos mientras sólo se leía no cuentan. Antes de encenderla, el panel y `GET /catalogo/{sku}` ya
+muestran qué se escribirá: las diferencias, `escrituras` y `crearEn`.
+
+**Por sistema.** `PRODUCTOS_ESCRIBIR_SISTEMAS` (lista separada por comas; por omisión
+`coreinbox,woocommerce,emite`) limita dónde se escribe; en los demás sólo se lee. Lo que no se escribe
+queda planeado para cuando se encienda ese sistema. Sin `WOO_URL` la web no se lee ni se escribe.
+
+**Eventos.** Cada escritura queda como evento `escritura` en `/panel/eventos` y en el detalle del SKU:
+`escrito`, `revertido`, `creado`, `adoptado`, `fusionado` o `error`, con el sistema y el campo. El
+resultado de cada pasada (`escritos`, `revertidos`, `creados`, `adoptados`, `fusionados`,
+`conError`, `pendientes`) queda en `ultimaPasada` de `GET /salud`. Los contadores `sincronizados`,
+`omitidos` y `conError` de `flujos.productos` son de la escritura de antes y ya no cambian.
+
+**Alcances.** En Coreinbox, `products:read` para leer y `products:write` para escribir. En Emite DTE,
+`catalogo:leer` y `catalogo:escribir`. En la web, una clave REST con permiso de lectura/escritura.
+
+#### Encenderla en certificación
+
+1. Con `FLUJO_PRODUCTOS=true` y `PRODUCTOS_ESCRIBIR=false`, dejar correr la lectura y revisar en el
+   panel: diferencias, «Lo que se escribirá» en el detalle, visibilidad web (lo publicado queda
+   aprobado por `web`; un borrador en la tienda queda `propuesto` y no se publica hasta aprobarlo
+   por SKU; lo publicado sólo pasa a borrador con un `rechazado` por SKU), categorías fuera de la
+   web, empates de históricos y «Quién manda».
+2. Respaldar las decisiones: `GET /catalogo/decisiones` (ver abajo).
+3. Encender por partes: `PRODUCTOS_ESCRIBIR=true` con `PRODUCTOS_ESCRIBIR_SISTEMAS=emite`, mirar los
+   eventos de escritura, y después sumar `coreinbox` y `woocommerce`.
+
+#### Respaldo de las decisiones
+
+Las decisiones del panel son lo único del conector que no se reconstruye leyendo los tres sistemas.
+`GET /catalogo/decisiones` (con el mismo `Authorization: Bearer <CATALOGO_API_KEY>`) devuelve todas en
+un JSON (`version`, `reglas`, `empates`, `conflictos` resueltos, `visibilidad`, `categoriasFuera`), y
+`POST /catalogo/decisiones` con ese mismo JSON las repone. Reponer es idempotente: lo que ya está igual
+no cambia y lo que no viene no se borra. Conviene guardarlo junto a `conector.env`:
+
+```bash
+curl -fsS -H "Authorization: Bearer $CATALOGO_API_KEY" http://conector:8080/catalogo/decisiones > decisiones-catalogo.json
+```
+
+y, en un conector nuevo o con el SQLite borrado:
+
+```bash
+curl -fsS -X POST -H "Authorization: Bearer $CATALOGO_API_KEY" -H "content-type: application/json" --data @decisiones-catalogo.json http://conector:8080/catalogo/decisiones
+```
 
 ## WooCommerce
 
@@ -246,13 +322,14 @@ pnpm verificar:woo
 ```
 
 Lista los primeros 5 productos (id, SKU, nombre y precio). Sólo lee. Las claves se crean en
-WooCommerce → Ajustes → Avanzado → API REST, con permiso de lectura/escritura (para la fase 1a del catálogo basta el de lectura).
+WooCommerce → Ajustes → Avanzado → API REST, con permiso de lectura/escritura (sólo para leer el catálogo basta el de lectura).
 
 ## Requisitos
 
 - Node.js 22.13 o superior (usa `node:sqlite` para su estado; sin más dependencias en producción).
 - En **Coreinbox**: una clave de API (Ajustes → Integraciones → Claves de API) con los alcances
-  `quotes:read`, `companies:read`, `contacts:read`, `products:read` y `activities:write`.
+  `quotes:read`, `companies:read`, `contacts:read`, `products:read` y `activities:write` (más
+  `products:write` con `PRODUCTOS_ESCRIBIR`).
 - En **Emite DTE**: una API key del emisor con `cotizaciones:escribir` y `dte:leer` (más
   `catalogo:leer` si se enciende `FLUJO_PRODUCTOS`, y `catalogo:escribir` sólo con `PRODUCTOS_ESCRIBIR`), y un webhook
   (Configuración → Webhooks) apuntando a `http://<conector>:8080/webhooks` suscrito a los seis
@@ -299,29 +376,30 @@ en la siguiente subida.
 
 ## Variables de entorno
 
-| Variable                   | Obligatoria         | Por omisión                                   | Para qué                                                                                                                                                                  |
-| -------------------------- | ------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COREINBOX_URL`            | Sí                  | —                                             | URL base de la API de Coreinbox.                                                                                                                                          |
-| `COREINBOX_API_KEY`        | Sí                  | —                                             | Clave `cik_…` de Coreinbox, con los alcances de [Requisitos](#requisitos).                                                                                                |
-| `COREINBOX_TIPO_ACTIVIDAD` | No                  | `d0000000-0000-0000-0000-000000000004` (nota) | Tipo de actividad del CRM con que se anotan los eventos.                                                                                                                  |
-| `EMITE_URL`                | Sí                  | —                                             | URL de la API de Emite DTE por la red interna (en el compose, `http://app:3000`).                                                                                         |
-| `EMITE_API_KEY`            | Sí                  | —                                             | API key del emisor, `edte_…`, con `cotizaciones:escribir` y `dte:leer` (y catálogo: `catalogo:leer` con `FLUJO_PRODUCTOS`, `catalogo:escribir` con `PRODUCTOS_ESCRIBIR`). |
-| `EMITE_EMISOR_ID`          | Sí                  | —                                             | Emisor al que se cargan las cotizaciones y los productos.                                                                                                                 |
-| `EMITE_URL_PUBLICA`        | No                  | El valor de `EMITE_URL`                       | URL con la que la gente abre Emite DTE; va en los enlaces de las actividades del CRM.                                                                                     |
-| `EMITE_WEBHOOK_SECRET`     | Sí                  | —                                             | Secreto `whsec_…` del webhook registrado en Emite DTE.                                                                                                                    |
-| `DESDE`                    | No                  | Fecha y hora de arranque                      | Primer `updatedSince` de cotizaciones y, con `PRODUCTOS_ESCRIBIR`, de productos, cuando no hay cursor guardado (ISO 8601). El catálogo no lo usa.                         |
-| `FLUJO_COTIZACIONES`       | No                  | `true`                                        | Enciende el flujo A, cotizaciones aceptadas.                                                                                                                              |
-| `FLUJO_PRODUCTOS`          | No                  | `false`                                       | Enciende el flujo C, catálogo de productos: lectura de los tres sistemas y registro canónico.                                                                             |
-| `SINCRONIZAR_PRODUCTOS`    | No (obsoleta)       | —                                             | Alias de `FLUJO_PRODUCTOS`, con aviso en el log. Si están las dos, manda `FLUJO_PRODUCTOS`.                                                                               |
-| `PRODUCTOS_ESCRIBIR`       | No                  | `false`                                       | Con `FLUJO_PRODUCTOS`, además de leer, lleva Coreinbox → Emite DTE como antes de la fase 1.                                                                               |
-| `CATALOGO_API_KEY`         | No                  | —                                             | Clave de `GET /catalogo` y sus acciones (`Authorization: Bearer`). Sin ella esas rutas no existen.                                                                        |
-| `FLUJO_PEDIDOS`            | No                  | `false`                                       | Flujo B, pedidos web. Sin implementar: encendido sólo deja un aviso en el log.                                                                                            |
-| `WOO_URL`                  | No, las tres juntas | —                                             | URL de la tienda WooCommerce. Debe ser `https://`.                                                                                                                        |
-| `WOO_CONSUMER_KEY`         | No, las tres juntas | —                                             | Clave de consumidor de la API REST, `ck_…`.                                                                                                                               |
-| `WOO_CONSUMER_SECRET`      | No, las tres juntas | —                                             | Secreto de consumidor de la API REST, `cs_…`.                                                                                                                             |
-| `INTERVALO_S`              | No                  | `60`                                          | Segundos entre pasadas. Mínimo 10.                                                                                                                                        |
-| `PUERTO`                   | No                  | `8080`                                        | Puerto del receptor de webhooks y de `GET /salud`.                                                                                                                        |
-| `ESTADO_RUTA`              | No                  | `./datos/estado.sqlite`                       | Dónde se guarda el estado (SQLite).                                                                                                                                       |
+| Variable                      | Obligatoria         | Por omisión                                   | Para qué                                                                                                                                                                  |
+| ----------------------------- | ------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COREINBOX_URL`               | Sí                  | —                                             | URL base de la API de Coreinbox.                                                                                                                                          |
+| `COREINBOX_API_KEY`           | Sí                  | —                                             | Clave `cik_…` de Coreinbox, con los alcances de [Requisitos](#requisitos).                                                                                                |
+| `COREINBOX_TIPO_ACTIVIDAD`    | No                  | `d0000000-0000-0000-0000-000000000004` (nota) | Tipo de actividad del CRM con que se anotan los eventos.                                                                                                                  |
+| `EMITE_URL`                   | Sí                  | —                                             | URL de la API de Emite DTE por la red interna (en el compose, `http://app:3000`).                                                                                         |
+| `EMITE_API_KEY`               | Sí                  | —                                             | API key del emisor, `edte_…`, con `cotizaciones:escribir` y `dte:leer` (y catálogo: `catalogo:leer` con `FLUJO_PRODUCTOS`, `catalogo:escribir` con `PRODUCTOS_ESCRIBIR`). |
+| `EMITE_EMISOR_ID`             | Sí                  | —                                             | Emisor al que se cargan las cotizaciones y los productos.                                                                                                                 |
+| `EMITE_URL_PUBLICA`           | No                  | El valor de `EMITE_URL`                       | URL con la que la gente abre Emite DTE; va en los enlaces de las actividades del CRM.                                                                                     |
+| `EMITE_WEBHOOK_SECRET`        | Sí                  | —                                             | Secreto `whsec_…` del webhook registrado en Emite DTE.                                                                                                                    |
+| `DESDE`                       | No                  | Fecha y hora de arranque                      | Primer `updatedSince` de cotizaciones cuando no hay cursor guardado (ISO 8601). El catálogo no lo usa.                                                                    |
+| `FLUJO_COTIZACIONES`          | No                  | `true`                                        | Enciende el flujo A, cotizaciones aceptadas.                                                                                                                              |
+| `FLUJO_PRODUCTOS`             | No                  | `false`                                       | Enciende el flujo C, catálogo de productos: lectura de los tres sistemas y registro canónico.                                                                             |
+| `SINCRONIZAR_PRODUCTOS`       | No (obsoleta)       | —                                             | Alias de `FLUJO_PRODUCTOS`, con aviso en el log. Si están las dos, manda `FLUJO_PRODUCTOS`.                                                                               |
+| `PRODUCTOS_ESCRIBIR`          | No                  | `false`                                       | Con `FLUJO_PRODUCTOS`, además de leer, escribe el canónico (ver [Escritura](#escritura-productos_escribirtrue)).                                                          |
+| `PRODUCTOS_ESCRIBIR_SISTEMAS` | No                  | `coreinbox,woocommerce,emite`                 | Dónde escribe la escritura, separados por comas; en los demás sólo lee.                                                                                                   |
+| `CATALOGO_API_KEY`            | No                  | —                                             | Clave de `GET /catalogo` y sus acciones (`Authorization: Bearer`). Sin ella esas rutas no existen.                                                                        |
+| `FLUJO_PEDIDOS`               | No                  | `false`                                       | Flujo B, pedidos web. Sin implementar: encendido sólo deja un aviso en el log.                                                                                            |
+| `WOO_URL`                     | No, las tres juntas | —                                             | URL de la tienda WooCommerce. Debe ser `https://`.                                                                                                                        |
+| `WOO_CONSUMER_KEY`            | No, las tres juntas | —                                             | Clave de consumidor de la API REST, `ck_…`.                                                                                                                               |
+| `WOO_CONSUMER_SECRET`         | No, las tres juntas | —                                             | Secreto de consumidor de la API REST, `cs_…`.                                                                                                                             |
+| `INTERVALO_S`                 | No                  | `60`                                          | Segundos entre pasadas. Mínimo 10.                                                                                                                                        |
+| `PUERTO`                      | No                  | `8080`                                        | Puerto del receptor de webhooks y de `GET /salud`.                                                                                                                        |
+| `ESTADO_RUTA`                 | No                  | `./datos/estado.sqlite`                       | Dónde se guarda el estado (SQLite).                                                                                                                                       |
 
 Los booleanos aceptan `true`, `1`, `si` o `sí`, y `false`, `0` o `no`. Otro valor falla al arrancar.
 `SINCRONIZAR_PRODUCTOS` se lee como antes: sólo `true`, `1`, `si` o `sí` la encienden.
@@ -362,7 +440,8 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
   enlace a su lista filtrada.
 - **Eventos** (`/panel/eventos`): lo último que pasó, en orden inverso: cotizaciones creadas o con
   error, webhooks recibidos, productos sincronizados u omitidos, conflictos abiertos o resueltos,
-  empates propuestos o decididos y acciones del panel, con enlace al SKU cuando lo hay. Filtros por
+  empates propuestos o decididos, acciones del panel y escrituras en los sistemas (con sistema y
+  campo), con enlace al SKU cuando lo hay. Filtros por
   consulta `?flujo=cotizaciones|productos&estado=…` (los estados de cada tipo, o el nombre de la
   acción) y `?pagina=2` (50 por página). Los enlaces a la cotización en Emite DTE usan
   `EMITE_URL_PUBLICA`.
@@ -372,28 +451,29 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
   `historicos=1`, y paginación. Desde la misma pantalla, las vistas **Históricos** y **Sin SKU**
   (`?vista=sin_sku&sistema=…`).
 - **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno,
-  reglas que le aplican, conflictos, empates con su histórico, índice de enlaces (cada URL abre el
-  sistema en otra pestaña) y la foto principal.
+  reglas que le aplican, conflictos, empates con su histórico, lo que se escribirá, las últimas
+  escrituras, índice de enlaces (cada URL abre el sistema en otra pestaña) y la foto principal.
 - **Históricos** (`/panel/historicos`): los productos históricos de Emite DTE con su uso y su
   empate (puntaje, motivo); confirmar o rechazar uno a uno o en lote. Filtro
   `?estado=propuesto|confirmado|rechazado|sin_candidato`.
 - **Conflictos** (`/panel/conflictos`): los abiertos de todo el catálogo; «quedarse con el de la
   web / Coreinbox / Emite DTE», uno a uno o en lote.
 - **Visibilidad web** (`/panel/visibilidad`): los propuestos para la web; aprobar o rechazar, uno
-  a uno o en lote. Un servicio no se ofrece.
-- **Quién manda** (`/panel/reglas`): qué sistema manda en cada campo para todo el catálogo. En lote
-  por SKU, eligiéndolos en la lista de productos; para uno, desde su detalle.
+  a uno o en lote. Un servicio no se ofrece. También las categorías de Coreinbox fuera de la web
+  (sacar o devolver) y los SKU rechazados por su categoría, para aprobarlos uno a uno.
+- **Quién manda** (`/panel/reglas`): qué sistema manda en cada campo, o «último cambio», para todo
+  el catálogo. En lote por SKU, eligiéndolos en la lista de productos; para uno, desde su detalle.
 
 ### Acciones
 
-Las decisiones son formularios HTML que mandan `POST /panel/acciones/{reglas|empates|conflictos|visibilidad}`
+Las decisiones son formularios HTML que mandan `POST /panel/acciones/{reglas|empates|conflictos|visibilidad|categorias}`
 y usan la misma lógica que la API JSON (`src/flujos/productos/acciones.ts`). No piden
 `CATALOGO_API_KEY`: el panel está detrás de Emite DTE, y la cabecera `X-Emite-Usuario` queda como
 usuario de la decisión. Tras aplicar, redirigen (303) a la pantalla de origen con el resultado
 (aplicadas y errores). Cada acción queda en la bitácora y aparece como evento `accion`.
 
-**Hasta la fase 1b, las decisiones del panel sólo cambian el registro del conector: no escriben en
-Coreinbox, en la web ni en Emite DTE.**
+Las decisiones cambian el registro del conector; con `PRODUCTOS_ESCRIBIR=true`, la pasada siguiente
+las lleva a Coreinbox, la web y Emite DTE.
 
 Protección mínima contra envíos desde otro sitio, sin cookies ni sesiones propias: un POST se rechaza
 con 403 si trae `Sec-Fetch-Site` y no es `same-origin` ni `none`, o si trae `Origin` y su host no es
@@ -435,9 +515,9 @@ La última pasada y la última falla viven en memoria y se pierden al reiniciar.
   la consulta periódica por recepción, sin tocar lo demás.
 - Factura sólo en pesos. Una cotización en otra moneda queda con error y aviso en el negocio.
 - Un workspace de Coreinbox ↔ un emisor de Emite DTE. Para más, una instancia por par.
-- El catálogo lee los tres sistemas, pero todavía no escribe en ninguno. La única escritura es el camino
-  de Coreinbox → Emite DTE de antes, sólo con `PRODUCTOS_ESCRIBIR=true`. No fusiona históricos y no
-  desactiva ni borra nada en Emite DTE.
+- El catálogo no crea productos en Coreinbox, ni los da de alta o edita desde el panel, ni sube
+  archivos (fase 1c). No borra en ningún sistema ni cambia códigos.
+- Un histórico adoptado sigue con `origen=historial` en Emite DTE: la API todavía no deja cambiarlo.
 - No lee las variaciones de los productos variables: sólo el SKU del padre.
 - No detecta los productos borrados en Coreinbox ni en la web: se quedan con su última lectura.
 - No descarga documentos: sólo indexa la URL y el hash SHA-256. De las imágenes, sólo la foto

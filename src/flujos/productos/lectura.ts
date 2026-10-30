@@ -26,9 +26,10 @@ import type {
 } from '../../estado-catalogo.js';
 import { CAMPOS_COMPARTIDOS } from '../../estado-catalogo.js';
 import type { Estado } from '../../estado.js';
-import { MARGEN_CURSOR_MS, num } from '../comun.js';
-import { TASA_IVA, brutoDesdeNeto, calcularProducto, comparable } from './canonico.js';
+import { MARGEN_CURSOR_MS, conValor, num } from '../comun.js';
+import { TASA_IVA, brutoDesdeNeto, calcularProducto, comparable, modoDe } from './canonico.js';
 import { indexarCanonicos, proponerEmpate } from './empates.js';
+import { unidadEmite } from './mapeo.js';
 
 export interface DependenciasLectura {
   coreinbox: Coreinbox;
@@ -161,6 +162,7 @@ export async function pasadaLectura(d: DependenciasLectura): Promise<ResultadoLe
         }
         const { lectura, indice } = desdeWoo(d.woocommerce, p, sku, modificado, leidoEn);
         guardar(lectura, indice);
+        aprobarPublicado(registro, sku, p.status, leidoEn);
       }
       if (ultima) registro.guardarCursor('woocommerce', restar(ultima));
     }
@@ -187,7 +189,10 @@ export async function pasadaLectura(d: DependenciasLectura): Promise<ResultadoLe
           }
           ultima = masReciente(ultima, modificado);
           r.leidosEmite++;
-          if (p.origen === 'historial') {
+          // Un histórico adoptado por la escritura (código igual al SKU, empate confirmado) es el
+          // producto de Emite DTE de ese SKU aunque siga con `origen=historial`.
+          const adoptado = registro.skuDe('emite', p.id);
+          if (p.origen === 'historial' && !(adoptado && p.codigo.trim() === adoptado)) {
             const antes = registro.historico(p.id);
             if (
               !antes ||
@@ -256,6 +261,26 @@ export async function pasadaLectura(d: DependenciasLectura): Promise<ResultadoLe
   return r;
 }
 
+/** Usuario con que queda la aprobación de lo que ya estaba publicado en la web. */
+export const USUARIO_WEB = 'web';
+
+/**
+ * Lo publicado en la web arranca aprobado: si la pasada lo ve con `status: publish` y sin decisión
+ * de visibilidad, la registra (`aprobado`, usuario `web`). Queda como una aprobación explícita más:
+ * una categoría fuera de la web no lo toca y, si después alguien lo pasa a borrador, se revierte. Un
+ * servicio no se aprueba (nunca va a la web).
+ */
+function aprobarPublicado(
+  registro: RegistroCatalogo,
+  sku: string,
+  estado: string,
+  en: string,
+): void {
+  if (estado !== 'publish' || registro.visibilidadDecidida(sku)) return;
+  if (registro.lecturas(sku).coreinbox?.campos.tipo?.valor === 'servicio') return;
+  registro.decidirVisibilidad(sku, { estado: 'aprobado', usuario: USUARIO_WEB, en });
+}
+
 /** Recalcula el producto canónico de un SKU; si ya no queda ninguna lectura, lo quita. */
 export function recalcular(registro: RegistroCatalogo, sku: string): void {
   const lecturas = registro.lecturas(sku);
@@ -263,13 +288,40 @@ export function recalcular(registro: RegistroCatalogo, sku: string): void {
     registro.quitarProducto(sku);
     return;
   }
+  const empates = registro.empatesDeSku(sku);
+  const avisos = empates
+    .filter((e) => e.resultado === 'requiere_mano')
+    .map(
+      (e) =>
+        `Requiere mano: Emite DTE no dejó fusionar el histórico ${
+          registro.historico(e.emiteId)?.codigo ?? e.emiteId
+        } (${e.resultadoDetalle ?? 'sin detalle'})`,
+    );
+  // Un histórico con el código exacto del SKU ocupa ese código en Emite DTE: confirmado se adopta,
+  // y sin confirmar no se crea otro encima.
+  let noCrearEnEmite: string | null = null;
+  for (const h of registro.historicosConCodigo(sku)) {
+    const empate = empates.find((e) => e.emiteId === h.emiteId);
+    noCrearEnEmite =
+      empate?.estado === 'confirmado'
+        ? `Se adopta el histórico ${h.codigo} de Emite DTE en vez de crearlo`
+        : empate?.estado === 'rechazado'
+          ? `Requiere mano: el histórico ${h.codigo} de Emite DTE ocupa el código y su empate está rechazado`
+          : `Emite DTE tiene un histórico con el código ${h.codigo}: falta decidir el empate`;
+    if (empate?.estado === 'confirmado') break;
+  }
+  const reglas = registro.reglas().filter((r) => r.ambito === '*' || r.ambito === sku);
   registro.guardarProducto(
     calcularProducto({
       sku,
       lecturas,
-      reglas: registro.reglas().filter((r) => r.ambito === '*' || r.ambito === sku),
+      reglas,
       visibilidad: registro.visibilidadDecidida(sku),
       conflictosAbiertos: registro.conflictos(sku, true),
+      primeraEscritura: registro.primeraEscritura(),
+      categoriasFuera: new Set(registro.categoriasFuera().map((c) => c.categoria)),
+      noCrearEnEmite,
+      avisos,
     }),
   );
 }
@@ -318,13 +370,18 @@ export function recalcularEmpates(registro: RegistroCatalogo, en: string): void 
 }
 
 /**
- * Un conflicto es un mismo campo compartido cambiado en dos sistemas desde la última pasada a
- * valores distintos. Devuelve cuántos se abrieron o actualizaron.
+ * Un conflicto es un mismo campo en «último cambio» cambiado en dos sistemas desde la última
+ * pasada a valores distintos (en un campo con propietario gana el propietario y no hay conflicto).
+ * Antes de la primera escritura no rige «último cambio» y tampoco hay conflictos. Devuelve cuántos
+ * se abrieron o actualizaron.
  */
 function abrirConflictos(registro: RegistroCatalogo, cambios: CambioCampo[], en: string): number {
+  if (!registro.primeraEscritura()) return 0;
+  const reglas = registro.reglas();
   const porCampo = new Map<string, CambioCampo[]>();
   for (const c of cambios) {
     if (!(CAMPOS_COMPARTIDOS as readonly string[]).includes(c.campo)) continue;
+    if (modoDe(reglas, c.sku, c.campo).modo !== 'ultimo') continue;
     const clave = `${c.sku}\u0000${c.campo}`;
     porCampo.set(clave, [...(porCampo.get(clave) ?? []), c]);
   }
@@ -360,7 +417,7 @@ const exentoCoreinbox = (p: ProductoCoreinbox): boolean =>
 const tasaCoreinbox = (p: ProductoCoreinbox): number =>
   p.taxRate === null || p.taxRate === undefined ? TASA_IVA : num(p.taxRate);
 
-function desdeCoreinbox(
+export function desdeCoreinbox(
   coreinbox: Coreinbox,
   p: ProductoCoreinbox,
   sku: string,
@@ -409,7 +466,15 @@ function desdeCoreinbox(
         categoria,
         exento: exentoCoreinbox(p),
       },
-      extra: { tipoCoreinbox: p.type, moneda: p.currencyCode },
+      // La tasa y la unidad las usa la escritura: el neto con el IVA de Coreinbox y la unidad al
+      // crear en Emite DTE.
+      extra: {
+        tipoCoreinbox: p.type,
+        moneda: p.currencyCode,
+        tasa: exentoCoreinbox(p) ? 0 : tasaCoreinbox(p),
+        ...conValor('unidad', unidadEmite(p.unit)),
+        ...conValor('categoriaId', p.categoryId ?? undefined),
+      },
     },
     indice,
   };
@@ -449,7 +514,7 @@ export function decodificarEntidades(texto: string): string {
 const URL_DOCUMENTO =
   /https?:\/\/[^\s"'<>]+\.(?:pdf|docx?|xlsx?|zip|dwg|stp|step)(?:\?[^\s"'<>]*)?/gi;
 
-function desdeWoo(
+export function desdeWoo(
   woo: WooCommerce,
   p: ProductoWoo,
   sku: string,
@@ -519,7 +584,7 @@ function desdeWoo(
   };
 }
 
-function desdeEmite(
+export function desdeEmite(
   emite: EmiteDte,
   p: ProductoEmite,
   sku: string,
@@ -554,7 +619,7 @@ function desdeEmite(
 }
 
 /** WooCommerce da la hora UTC sin zona (`2026-10-30T11:00:00`); se lleva a ISO completo. */
-function horaUtc(gmt: string | undefined): string | null {
+export function horaUtc(gmt: string | undefined): string | null {
   if (!gmt) return null;
   const ms = Date.parse(`${gmt.replace(/Z$/, '')}Z`);
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();

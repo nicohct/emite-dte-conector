@@ -104,6 +104,17 @@ export type CambiosProductoWoo = Partial<{
   status: string;
 }>;
 
+/** Cuerpo de `POST /products`: un producto simple con lo mínimo del catálogo. */
+export interface ProductoNuevoWoo {
+  name: string;
+  sku: string;
+  type: 'simple';
+  /** Precio bruto entero, como texto; vacío si no tiene. */
+  regular_price: string;
+  /** `publish` si está activo y aprobado; si no, `draft`. */
+  status: 'publish' | 'draft';
+}
+
 /** Respuesta de `POST /orders/{id}/notes`. */
 export interface NotaPedidoWoo {
   id: number;

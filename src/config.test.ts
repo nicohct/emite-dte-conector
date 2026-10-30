@@ -98,6 +98,34 @@ describe('leerConfig: catálogo', () => {
     );
   });
 
+  it('PRODUCTOS_ESCRIBIR_SISTEMAS vacía son los tres', () => {
+    expect(leerConfig({ ...BASE }).productos.sistemas).toEqual([
+      'coreinbox',
+      'woocommerce',
+      'emite',
+    ]);
+    expect(leerConfig({ ...BASE, PRODUCTOS_ESCRIBIR_SISTEMAS: ' ' }).productos.sistemas).toEqual([
+      'coreinbox',
+      'woocommerce',
+      'emite',
+    ]);
+  });
+
+  it('PRODUCTOS_ESCRIBIR_SISTEMAS elige sistemas, sin importar orden ni mayúsculas', () => {
+    expect(
+      leerConfig({ ...BASE, PRODUCTOS_ESCRIBIR_SISTEMAS: 'emite' }).productos.sistemas,
+    ).toEqual(['emite']);
+    expect(
+      leerConfig({ ...BASE, PRODUCTOS_ESCRIBIR_SISTEMAS: 'Emite, coreinbox' }).productos.sistemas,
+    ).toEqual(['coreinbox', 'emite']);
+  });
+
+  it('un sistema desconocido en PRODUCTOS_ESCRIBIR_SISTEMAS falla al arrancar', () => {
+    expect(() => leerConfig({ ...BASE, PRODUCTOS_ESCRIBIR_SISTEMAS: 'emite,web' })).toThrow(
+      /PRODUCTOS_ESCRIBIR_SISTEMAS.*web/,
+    );
+  });
+
   it('CATALOGO_API_KEY ausente o en blanco queda en null', () => {
     expect(leerConfig({ ...BASE }).catalogoApiKey).toBeNull();
     expect(leerConfig({ ...BASE, CATALOGO_API_KEY: '   ' }).catalogoApiKey).toBeNull();

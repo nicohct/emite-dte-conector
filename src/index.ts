@@ -104,7 +104,7 @@ async function bucle() {
             estado,
             emisorId: config.emite.emisorId,
             escribir: config.productos.escribir,
-            desde: config.desde,
+            sistemas: config.productos.sistemas,
           }),
         (r) => r.camposCambiados > 0 || (r.revisados ?? 0) > 0,
         {

@@ -6,9 +6,13 @@
  *   `vista=historicos` lista los históricos de Emite DTE con sus empates y con `vista=sin_sku` los
  *   productos sin SKU de cada sistema.
  * - `GET /catalogo/{sku}`: canónico, valor en cada sistema, tipo, alcance, visibilidad,
- *   conflictos, empates e índice de enlaces.
- * - `POST /catalogo/acciones/{reglas|empates|conflictos|visibilidad}`: decisiones del panel. En
- *   la fase 1a sólo cambian el registro; no escriben en ningún sistema.
+ *   conflictos, empates, índice de enlaces, lo que la escritura haría (`escrituras`, `crearEn`)
+ *   y sus últimos eventos de escritura.
+ * - `POST /catalogo/acciones/{reglas|empates|conflictos|visibilidad|categorias}`: decisiones del
+ *   panel. Cambian el registro; la pasada de escritura siguiente las lleva a los sistemas.
+ * - `GET /catalogo/decisiones`: todas las decisiones humanas en JSON, para respaldarlas.
+ *   `POST /catalogo/decisiones` repone un respaldo (idempotente). Un SKU llamado `decisiones`
+ *   se consulta igual por `GET /catalogo?q=decisiones`.
  *
  * Todo con `Authorization: Bearer <CATALOGO_API_KEY>`. Sin clave configurada las rutas no existen
  * (404). La cabecera `X-Emite-Usuario` (la pone Emite DTE con el correo del admin) queda
@@ -25,7 +29,7 @@ import type {
 } from '../../estado-catalogo.js';
 import { SISTEMAS_CATALOGO } from '../../estado-catalogo.js';
 import type { Estado } from '../../estado.js';
-import { aplicarAccion, ErrorPeticion, esAccion } from './acciones.js';
+import { aplicarAccion, ErrorPeticion, esAccion, importarDecisiones } from './acciones.js';
 
 export interface DependenciasCatalogoApi {
   estado: Estado;
@@ -71,6 +75,25 @@ export function crearAtencionCatalogo(
       responder(res, 200, listar(registro, url.searchParams));
       return true;
     }
+    if (partes.length === 1 && partes[0] === 'decisiones') {
+      if (req.method === 'GET') {
+        responder(res, 200, registro.exportarDecisiones());
+        return true;
+      }
+      if (req.method === 'POST') {
+        const cuerpo = await cuerpoJson(req, res);
+        if (cuerpo === SIN_CUERPO) return true;
+        try {
+          responder(res, 200, {
+            importadas: importarDecisiones(registro, cuerpo, usuario, ahora()),
+          });
+        } catch (e) {
+          if (!(e instanceof ErrorPeticion)) throw e;
+          responder(res, 400, { error: e.message });
+        }
+        return true;
+      }
+    }
     if (req.method === 'GET' && partes.length === 1 && partes[0]) {
       const detalle = detalleDe(registro, partes[0]);
       responder(res, detalle ? 200 : 404, detalle ?? { error: 'no existe' });
@@ -82,18 +105,8 @@ export function crearAtencionCatalogo(
         responder(res, 404, { error: 'no existe' });
         return true;
       }
-      const texto = await leerCuerpo(req);
-      if (texto === null) {
-        responder(res, 413, { error: 'cuerpo demasiado grande' });
-        return true;
-      }
-      let cuerpo: unknown;
-      try {
-        cuerpo = JSON.parse(texto);
-      } catch {
-        responder(res, 400, { error: 'el cuerpo no es JSON' });
-        return true;
-      }
+      const cuerpo = await cuerpoJson(req, res);
+      if (cuerpo === SIN_CUERPO) return true;
       try {
         responder(res, 200, aplicarAccion(registro, nombre, cuerpo, usuario, ahora()));
       } catch (e) {
@@ -216,6 +229,7 @@ export function detalleDe(registro: RegistroCatalogo, sku: string) {
       historico: registro.historico(e.emiteId),
     })),
     indice: registro.indice(sku),
+    eventos: registro.eventosDeSku(sku, 20),
   };
 }
 
@@ -232,6 +246,26 @@ function autorizado(clave: string, autorizacion: string | undefined): boolean {
 function cabecera(req: IncomingMessage, nombre: string): string | undefined {
   const v = req.headers[nombre];
   return Array.isArray(v) ? v[0] : v;
+}
+
+const SIN_CUERPO = Symbol('sin cuerpo');
+
+/** El cuerpo JSON de la petición; si es demasiado grande o no es JSON, ya respondió (413 o 400). */
+async function cuerpoJson(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<unknown | typeof SIN_CUERPO> {
+  const texto = await leerCuerpo(req);
+  if (texto === null) {
+    responder(res, 413, { error: 'cuerpo demasiado grande' });
+    return SIN_CUERPO;
+  }
+  try {
+    return JSON.parse(texto) as unknown;
+  } catch {
+    responder(res, 400, { error: 'el cuerpo no es JSON' });
+    return SIN_CUERPO;
+  }
 }
 
 function leerCuerpo(req: IncomingMessage): Promise<string | null> {

@@ -4,8 +4,8 @@
  * proceso y agrega `X-Emite-Usuario`; nunca se expone a Internet.
  *
  * Lee todo de `Estado`. Los únicos POST son las decisiones del catálogo
- * (`/panel/acciones/{reglas|empates|conflictos|visibilidad}`), que usan la misma lógica que la API
- * JSON y, hasta la fase 1b, sólo cambian el registro.
+ * (`/panel/acciones/{reglas|empates|conflictos|visibilidad|categorias}`), que usan la misma lógica
+ * que la API JSON y sólo cambian el registro: la pasada de escritura las lleva a los sistemas.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Estado, FlujoEvento } from '../estado.js';

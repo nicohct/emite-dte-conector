@@ -95,6 +95,8 @@ describe('Estado: eventos', () => {
       mensaje: 'C-1001',
       referencia: 'C-1001',
       emiteNumero: 1,
+      sistema: null,
+      campo: null,
     });
     expect(eventos.find((e) => e.idExterno === 'q2')).toMatchObject({
       mensaje: 'RECEPTOR: falta el RUT',

@@ -204,7 +204,8 @@ function avisoHtml(a: Aviso): Html {
         : ''
     }.
     <span class="tenue"
-      >Sólo cambia el registro del conector; no se escribió en ningún sistema.</span
+      >Cambia el registro del conector; la siguiente pasada de escritura lo lleva a los sistemas, si
+      está encendida.</span
     >
   </div>`;
 }

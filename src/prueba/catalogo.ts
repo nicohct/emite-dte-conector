@@ -1,7 +1,7 @@
 /**
  * Dobles sintéticos de Coreinbox, la web y Emite DTE a nivel de HTTP, con un mundo inicial de
- * productos inventados. Son los de las pruebas de la fase 1a (`catalogo.test.ts`), aquí exportados
- * para reutilizarlos en las del panel. Sólo para pruebas: `tsconfig.json` deja `src/prueba/` fuera
+ * productos inventados. Leen y escriben sobre ese mundo; son la única fuente de dobles de las
+ * pruebas del catálogo, de la escritura y del panel. Sólo para pruebas: `tsconfig.json` deja `src/prueba/` fuera
  * del build.
  */
 import { expect } from 'vitest';
@@ -11,6 +11,7 @@ import type { ProductoEmite } from '../adaptadores/emite/cliente.js';
 import { EmiteDte } from '../adaptadores/emite/cliente.js';
 import { WooCommerce } from '../adaptadores/woocommerce/cliente.js';
 import type { ProductoWoo } from '../adaptadores/woocommerce/tipos.js';
+import type { SistemaCatalogo } from '../estado-catalogo.js';
 import { Estado } from '../estado.js';
 import { pasadaCatalogo } from '../flujos/productos/catalogo.js';
 
@@ -96,6 +97,24 @@ export interface Mundo {
   alias: Record<string, string>;
   /** Respuesta forzada de la tienda (para simular caídas). */
   wooStatus?: number;
+  /** Ids de Emite DTE con inventario: `fusionar` los rechaza como origen. */
+  inventario?: string[];
+  /** Hora de la próxima escritura en los dobles; cada una avanza un segundo. */
+  reloj?: number;
+}
+
+/** La hora de una escritura en el mundo: después de todo lo inicial, un segundo más cada vez. */
+export function tic(mundo: Mundo): string {
+  mundo.reloj = (mundo.reloj ?? Date.parse(T2) + 60_000) + 1000;
+  return new Date(mundo.reloj).toISOString();
+}
+
+/** Lo que cada doble recibió en sus escrituras, en orden. */
+export interface Escritura {
+  sistema: 'coreinbox' | 'woocommerce' | 'emite';
+  metodo: string;
+  ruta: string;
+  cuerpo: Record<string, unknown>;
 }
 
 export function mundoInicial(): Mundo {
@@ -173,16 +192,138 @@ export function respuesta(cuerpo: unknown, status = 200, cabeceras: Record<strin
 /** Responde rutas propias de una prueba (las fotos, por ejemplo) antes que los tres sistemas. */
 export type RutasExtra = (url: URL, init?: RequestInit) => Response | null;
 
-/** Un `fetch` que hace de los tres sistemas sobre `mundo` y registra cada petición. */
+/**
+ * Las escrituras de los tres dobles sobre `mundo`: cambian el producto y su hora de modificación,
+ * como el sistema real, para que la lectura siguiente las vea (y reconozca el eco).
+ */
+function escribir(mundo: Mundo, url: URL, metodo: string, cuerpo: Record<string, unknown>) {
+  const ruta = url.pathname;
+  if (url.origin === CI) {
+    const sobre = (data: unknown) => ({ success: true, data, meta: { timestamp: T2 } });
+    const id = ruta.match(/^\/api\/v1\/products\/([^/]+)$/)?.[1];
+    if (metodo === 'PATCH' && id) {
+      const p = mundo.coreinbox.find((c) => c.id === decodeURIComponent(id));
+      if (!p) return respuesta({ success: false, error: { code: 'NOT_FOUND' } }, 404);
+      if (typeof cuerpo.name === 'string') p.name = cuerpo.name;
+      if (typeof cuerpo.unitPrice === 'number') p.unitPrice = String(cuerpo.unitPrice);
+      if (typeof cuerpo.isActive === 'boolean') p.isActive = cuerpo.isActive;
+      if (cuerpo.categoryId !== undefined) p.categoryId = cuerpo.categoryId as string | null;
+      p.updatedAt = tic(mundo);
+      return respuesta(sobre(p));
+    }
+  }
+  if (url.origin === TIENDA) {
+    const sello = () => tic(mundo).slice(0, 19);
+    if (metodo === 'POST' && ruta === '/wp-json/wc/v3/products') {
+      if (mundo.woo.some((w) => w.sku === cuerpo.sku)) {
+        return respuesta({ code: 'product_invalid_sku', message: 'SKU repetido' }, 400);
+      }
+      const id = Math.max(100, ...mundo.woo.map((w) => w.id)) + 1;
+      const hora = sello();
+      const p = woo(id, {
+        sku: String(cuerpo.sku),
+        name: String(cuerpo.name),
+        regular_price: String(cuerpo.regular_price ?? ''),
+        price: String(cuerpo.regular_price ?? ''),
+        status: String(cuerpo.status ?? 'draft'),
+        date_modified: hora,
+        date_modified_gmt: hora,
+      });
+      mundo.woo.push(p);
+      return respuesta(p, 201);
+    }
+    const id = ruta.match(/^\/wp-json\/wc\/v3\/products\/(\d+)$/)?.[1];
+    if (metodo === 'PUT' && id) {
+      const p = mundo.woo.find((w) => w.id === Number(id));
+      if (!p) return respuesta({ code: 'woocommerce_rest_product_invalid_id' }, 404);
+      if (typeof cuerpo.name === 'string') p.name = cuerpo.name;
+      if (typeof cuerpo.regular_price === 'string') p.regular_price = cuerpo.regular_price;
+      if (typeof cuerpo.status === 'string') p.status = cuerpo.status;
+      p.date_modified_gmt = p.date_modified = sello();
+      return respuesta(p);
+    }
+  }
+  if (url.origin === EMITE) {
+    if (metodo === 'POST' && ruta === '/api/v1/productos') {
+      const codigo = String(cuerpo.codigo);
+      if (mundo.emite.some((e) => e.codigo === codigo && e.origen !== 'historial')) {
+        return respuesta({ error: { code: 'PRODUCTO_DUPLICADO', message: 'ya existe' } }, 409);
+      }
+      const p = emite(`nuevo-${codigo}`, {
+        codigo,
+        nombre: String(cuerpo.nombre),
+        precioNeto: Number(cuerpo.precioNeto),
+        tipo: cuerpo.tipo === 'servicio' ? 'servicio' : 'bien',
+        exento: cuerpo.exento === true,
+        activo: cuerpo.activo !== false,
+        categoria: typeof cuerpo.categoria === 'string' ? cuerpo.categoria : null,
+        unidad: typeof cuerpo.unidad === 'string' ? cuerpo.unidad : 'UN',
+        origen: 'manual',
+        updatedAt: tic(mundo),
+      });
+      mundo.emite.push(p);
+      return respuesta(p, 201);
+    }
+    if (metodo === 'POST' && ruta === '/api/v1/productos/fusionar') {
+      const destino = mundo.emite.find((e) => e.id === cuerpo.destinoId);
+      const origenes = (cuerpo.origenIds as string[]).map((id) =>
+        mundo.emite.find((e) => e.id === id),
+      );
+      if (!destino || origenes.some((o) => !o)) {
+        return respuesta({ error: { code: 'PRODUCTO_NO_EXISTE', message: 'no existe' } }, 404);
+      }
+      if (origenes.some((o) => o && mundo.inventario?.includes(o.id))) {
+        return respuesta(
+          { error: { code: 'PRODUCTO_CON_INVENTARIO', message: 'tiene inventario' } },
+          409,
+        );
+      }
+      for (const o of origenes) {
+        if (!o) continue;
+        o.fusionadoEnId = destino.id;
+        o.activo = false;
+        o.updatedAt = tic(mundo);
+      }
+      return respuesta({ destino, fusionados: origenes.length, lineasReapuntadas: 0 });
+    }
+    const id = ruta.match(/^\/api\/v1\/productos\/([^/]+)$/)?.[1];
+    if (metodo === 'PATCH' && id) {
+      const p = mundo.emite.find((e) => e.id === decodeURIComponent(id));
+      if (!p) return respuesta({ error: { code: 'PRODUCTO_NO_EXISTE' } }, 404);
+      expect(cuerpo.codigo).toBeUndefined();
+      if (typeof cuerpo.nombre === 'string') p.nombre = cuerpo.nombre;
+      if (typeof cuerpo.precioNeto === 'number') p.precioNeto = cuerpo.precioNeto;
+      if (typeof cuerpo.activo === 'boolean') p.activo = cuerpo.activo;
+      if (cuerpo.tipo === 'bien' || cuerpo.tipo === 'servicio') p.tipo = cuerpo.tipo;
+      if (typeof cuerpo.categoria === 'string') p.categoria = cuerpo.categoria;
+      p.updatedAt = tic(mundo);
+      return respuesta(p);
+    }
+  }
+  return respuesta({ error: 'escritura desconocida en el doble' }, 405);
+}
+
+/**
+ * Un `fetch` que hace de los tres sistemas sobre `mundo` y registra cada petición. Las escrituras
+ * (POST, PATCH, PUT) cambian `mundo` y quedan además en `escrituras`. Nunca hay DELETE.
+ */
 export function dobles(mundo: Mundo, extra: RutasExtra = () => null) {
   const peticiones: Peticion[] = [];
+  const escrituras: Escritura[] = [];
   const http = (async (entrada: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(entrada));
     const metodo = init?.method ?? 'GET';
     peticiones.push({ metodo, url });
     const propia = extra(url, init);
     if (propia) return propia;
-    if (metodo !== 'GET') return respuesta({ error: 'el doble sólo lee' }, 405);
+    expect(metodo).not.toBe('DELETE');
+    if (metodo !== 'GET') {
+      const cuerpo = (init?.body ? JSON.parse(String(init.body)) : {}) as Record<string, unknown>;
+      const sistema =
+        url.origin === CI ? 'coreinbox' : url.origin === TIENDA ? 'woocommerce' : 'emite';
+      escrituras.push({ sistema, metodo, ruta: url.pathname, cuerpo });
+      return escribir(mundo, url, metodo, cuerpo);
+    }
     const q = url.searchParams;
 
     if (url.origin === CI) {
@@ -236,7 +377,7 @@ export function dobles(mundo: Mundo, extra: RutasExtra = () => null) {
     }
     return respuesta({ error: 'ruta desconocida en el doble' }, 404);
   }) as typeof fetch;
-  return { http, peticiones };
+  return { http, peticiones, escrituras };
 }
 
 export function armar(
@@ -244,7 +385,7 @@ export function armar(
   estado = new Estado(':memory:'),
   extra: RutasExtra = () => null,
 ) {
-  const { http, peticiones } = dobles(mundo, extra);
+  const { http, peticiones, escrituras } = dobles(mundo, extra);
   const d = {
     coreinbox: new Coreinbox(CI, 'cik_prueba', http),
     emite: new EmiteDte(EMITE, 'edte_prueba', http),
@@ -256,8 +397,8 @@ export function armar(
     estado,
     emisorId: EMISOR,
     escribir: false,
-    desde: '2026-01-01T00:00:00Z',
+    sistemas: ['coreinbox', 'woocommerce', 'emite'] as SistemaCatalogo[],
     ahora: () => AHORA,
   };
-  return { d, http, mundo, estado, peticiones, pasada: () => pasadaCatalogo(d) };
+  return { d, http, mundo, estado, peticiones, escrituras, pasada: () => pasadaCatalogo(d) };
 }

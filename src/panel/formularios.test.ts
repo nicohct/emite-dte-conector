@@ -276,3 +276,102 @@ describe('destino y avisoDe: bordes', () => {
     expect(avisoDe(new URLSearchParams('accion=reglas'))).toBeNull();
   });
 });
+
+describe('cuerpoDe: alta y edición', () => {
+  it('alta: precio numérico, categoría vacía omitida, casillas y aprobación', () => {
+    expect(
+      cuerpoDe(
+        'alta',
+        form(
+          ['sku', 'N-1'],
+          ['nombre', 'Tubo'],
+          ['precio', '1200'],
+          ['tipo', 'bien'],
+          ['categoria', ''],
+          ['activo', '1'],
+          ['aprobar_web', '1'],
+        ),
+      ),
+    ).toEqual({
+      sku: 'N-1',
+      nombre: 'Tubo',
+      precio: 1200,
+      tipo: 'bien',
+      exento: false,
+      activo: true,
+      visibilidad: 'aprobado',
+    });
+    expect(
+      cuerpoDe(
+        'alta',
+        form(
+          ['sku', 'N-2'],
+          ['nombre', 'X'],
+          ['precio', ''],
+          ['tipo', 'servicio'],
+          ['categoria', 'C'],
+          ['exento', '1'],
+        ),
+      ),
+    ).toEqual({
+      sku: 'N-2',
+      nombre: 'X',
+      precio: '',
+      tipo: 'servicio',
+      categoria: 'C',
+      exento: true,
+      activo: false,
+    });
+    expect(cuerpoDe('alta', form(['precio', 'abc']))).toMatchObject({ precio: 'abc' });
+  });
+
+  it('edicion: sólo los campos que difieren de su antes_', () => {
+    expect(
+      cuerpoDe(
+        'edicion',
+        form(
+          ['sku', 'A'],
+          ['nombre', 'Nuevo'],
+          ['antes_nombre', 'Viejo'],
+          ['precio', '500'],
+          ['antes_precio', '500'],
+          ['tipo', 'bien'],
+          ['antes_tipo', 'bien'],
+          ['categoria', ''],
+          ['antes_categoria', ''],
+          ['activo', '1'],
+          ['antes_activo', 'true'],
+          ['antes_exento', 'false'],
+        ),
+      ),
+    ).toEqual({ sku: 'A', campos: { nombre: 'Nuevo' } });
+  });
+
+  it('edicion: precio numérico y casillas que se marcan o se desmarcan', () => {
+    expect(
+      cuerpoDe(
+        'edicion',
+        form(
+          ['sku', 'A'],
+          ['precio', '700'],
+          ['antes_precio', '500'],
+          ['exento', '1'],
+          ['antes_exento', 'false'],
+          ['antes_activo', 'true'],
+        ),
+      ),
+    ).toEqual({ sku: 'A', campos: { precio: 700, exento: true, activo: false } });
+  });
+
+  it('edicion: sin cambios deja campos vacío; un precio ilegible pasa tal cual', () => {
+    expect(cuerpoDe('edicion', form(['sku', 'A'], ['nombre', 'N'], ['antes_nombre', 'N']))).toEqual(
+      { sku: 'A', campos: {} },
+    );
+    expect(cuerpoDe('edicion', form(['sku', 'A'], ['precio', 'x'], ['antes_precio', '5']))).toEqual(
+      {
+        sku: 'A',
+        campos: { precio: 'x' },
+      },
+    );
+  });
+});

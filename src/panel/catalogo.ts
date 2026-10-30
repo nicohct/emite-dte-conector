@@ -185,6 +185,7 @@ const BANDERAS: Array<[keyof Omit<FiltroCatalogo, 'q'>, string, string]> = [
   ['sinSku', 'sin_sku', 'sin SKU en algún sistema de su alcance'],
   ['propuestoWeb', 'propuesto_web', 'propuesto para la web'],
   ['historicos', 'historicos', 'con históricos propuestos'],
+  ['pendientes', 'pendientes', 'pendientes del panel'],
 ];
 
 /** Valores desconocidos se ignoran (filtro vacío, página 1). */
@@ -252,7 +253,10 @@ export function pantallaProductos(
     return html`<tr>
       <td><input type="checkbox" name="sku" value="${p.sku}" aria-label="Elegir ${p.sku}" /></td>
       <td>${foto(base, p.sku, registro.fotos(p.sku).length > 0, 'chica')}</td>
-      <td class="nowrap">${enlaceSku(p.sku, base)}</td>
+      <td class="nowrap">
+        ${enlaceSku(p.sku, base)}
+        ${p.pendiente ? html`<br /><span class="etiqueta aviso" title="Alta o edición del panel que la pasada aún no escribe">pendiente</span>` : ''}
+      </td>
       ${CAMPOS_COMPARTIDOS.map((c) => html`<td>${celdaCampo(p, c, valores(c))}</td>`)}
       <td>${p.tipo ?? nada}</td>
       <td>${alcance(p)}</td>
@@ -270,6 +274,7 @@ export function pantallaProductos(
   });
   return html`<h1>Productos</h1>
     ${pestanas(base, 'productos')}
+    <p><a href="${base}productos/nuevo">Nuevo producto</a></p>
     <form class="filtros" method="get">
       <label
         >Buscar
@@ -390,6 +395,210 @@ function pantallaSinSku(registro: RegistroCatalogo, f: FiltroPanelCatalogo, base
     <p class="tenue">
       Sin SKU no se pueden cruzar entre sistemas: hay que ponérselo en su origen.
     </p>`;
+}
+
+// --- Alta y edición ---
+
+const AVISO_SIN_CATEGORIAS =
+  'El registro aún no tiene categorías de Coreinbox: escríbela tal como está en Coreinbox.';
+
+/**
+ * La categoría: un desplegable con las leídas de Coreinbox (más «sin categoría») o, si el registro
+ * aún no tiene ninguna, un campo libre. Si la actual no está entre las leídas, se conserva como
+ * opción para no perderla al guardar.
+ */
+function campoCategoria(registro: RegistroCatalogo, actual: string | null): Html {
+  const leidas = registro.categoriasLeidas();
+  if (leidas.length === 0) {
+    return html`<label
+      >Categoría
+      <input type="text" name="categoria" maxlength="80" value="${actual ?? ''}" />
+      <span class="tenue">${AVISO_SIN_CATEGORIAS}</span></label
+    >`;
+  }
+  const opciones = actual && !leidas.includes(actual) ? [actual, ...leidas] : leidas;
+  return html`<label
+    >Categoría
+    <select name="categoria">
+      <option value="">sin categoría</option>
+      ${opciones.map(
+        (c) => html`<option value="${c}" ${c === actual ? html` selected` : ''}>${c}</option>`,
+      )}
+    </select></label
+  >`;
+}
+
+const selectTipo = (actual: string | null) =>
+  html`<label
+    >Tipo
+    <select name="tipo">
+      ${actual === null ? html`<option value="" selected>sin tipo</option>` : ''}
+      ${['bien', 'servicio'].map(
+        (t) => html`<option value="${t}" ${t === actual ? html` selected` : ''}>${t}</option>`,
+      )}
+    </select></label
+  >`;
+
+export function pantallaNuevo(registro: RegistroCatalogo, base: string): Html {
+  return html`<p><a href="${base}productos">← Productos</a></p>
+    <h1>Nuevo producto</h1>
+    <p class="tenue">
+      El producto queda pendiente hasta la próxima pasada de escritura: se crea en Coreinbox y en
+      Emite DTE, y en la web sólo si lo apruebas aquí. El SKU no se puede cambiar después.
+    </p>
+    ${formulario(
+      base,
+      'alta',
+      'productos?pendientes=1',
+      html`<div class="filtros">
+          <label>SKU <input type="text" name="sku" maxlength="35" required /></label>
+          <label
+            >Nombre <input type="text" name="nombre" maxlength="80" required size="40"
+          /></label>
+          <label
+            >Precio bruto (pesos, entero)
+            <input type="number" name="precio" min="0" step="1" required
+          /></label>
+          ${selectTipo('bien')} ${campoCategoria(registro, null)}
+        </div>
+        <div class="filtros">
+          <label class="casilla"><input type="checkbox" name="exento" value="1" /> Exento</label>
+          <label class="casilla"
+            ><input type="checkbox" name="activo" value="1" checked /> Activo</label
+          >
+          <label class="casilla"
+            ><input type="checkbox" name="aprobar_web" value="1" /> Aprobar para la web</label
+          >
+          <span class="tenue">Un servicio nunca va a la web.</span>
+        </div>
+        <button type="submit">Crear producto</button>`,
+    )}`;
+}
+
+type Detalle = NonNullable<ReturnType<typeof detalleDe>>;
+
+/** Lo que el panel dejó pendiente en un SKU (el alta y las ediciones), con quién y cuándo. */
+function pendienteDe(d: Detalle): Html | '' {
+  const { alta, ediciones } = d.pendientes;
+  if (!alta && ediciones.length === 0) return '';
+  const quien = (u: string | null) => u ?? 'sin usuario';
+  return html`<section class="bloque">
+    <h2>Pendiente de escribir</h2>
+    <p class="tenue">
+      Se escribe en la pasada siguiente; con <span class="id">PRODUCTOS_ESCRIBIR=false</span> se
+      acumula.
+    </p>
+    ${
+      alta
+        ? html`<p>
+              <strong>Alta desde el panel</strong> · pendiente de crear · ${quien(alta.usuario)}
+              ${fecha(alta.en)}
+            </p>
+            <dl class="valores">
+              <dt>Nombre</dt>
+              <dd>${valor('nombre', alta.nombre)}</dd>
+              <dt>Precio bruto</dt>
+              <dd>${valor('precio', alta.precio)}</dd>
+              <dt>Tipo</dt>
+              <dd>${valor('tipo', alta.tipo)}</dd>
+              <dt>Categoría</dt>
+              <dd>${valor('categoria', alta.categoria)}</dd>
+              <dt>Exento</dt>
+              <dd>${valor('exento', alta.exento)}</dd>
+              <dt>Activo</dt>
+              <dd>${valor('activo', alta.activo)}</dd>
+            </dl>`
+        : ''
+    }
+    ${
+      ediciones.length
+        ? html`<div class="tabla">
+            <table>
+              <thead>
+                <tr>
+                  <th>Campo</th>
+                  <th>Valor</th>
+                  <th>Quién</th>
+                  <th>Cuándo</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${ediciones.map(
+                  (e) =>
+                    html`<tr>
+                      <td>${NOMBRE_CAMPO[e.campo]}</td>
+                      <td>${valor(e.campo, e.valor)}</td>
+                      <td>${quien(e.usuario)}</td>
+                      <td>${fecha(e.en)}</td>
+                    </tr>`,
+                )}
+              </tbody>
+            </table>
+          </div>`
+        : ''
+    }
+  </section>`;
+}
+
+/** El formulario de edición, precargado con el canónico; sólo cuentan los campos que cambian. */
+function formularioEdicion(
+  registro: RegistroCatalogo,
+  d: Detalle,
+  sku: string,
+  base: string,
+  volver: string,
+): Html {
+  const actual = (campo: CampoCatalogo) => d.canonico[campo]?.valor;
+  const texto = (campo: CampoCatalogo) => {
+    const v = actual(campo);
+    return v === null || v === undefined ? '' : String(v);
+  };
+  const antes = (campo: CampoCatalogo) =>
+    html`<input type="hidden" name="antes_${campo}" value="${texto(campo)}" />`;
+  const casilla = (campo: 'activo' | 'exento', etiqueta: string) =>
+    html`<input type="hidden" name="antes_${campo}" value="${String(actual(campo) === true)}" />
+      <label class="casilla"
+        ><input
+          type="checkbox"
+          name="${campo}"
+          value="1"
+          ${actual(campo) === true ? html` checked` : ''}
+        />
+        ${etiqueta}</label
+      >`;
+  const tipo = actual('tipo');
+  const categoria = actual('categoria');
+  return html`<section class="bloque">
+    <h2>Editar</h2>
+    ${formulario(
+      base,
+      'edicion',
+      volver,
+      html`<input type="hidden" name="sku" value="${sku}" />
+        <div class="filtros">
+          <label>SKU <span class="id">${sku}</span></label>
+          <label
+            >Nombre
+            <input type="text" name="nombre" maxlength="80" size="40" value="${texto('nombre')}"
+          /></label>
+          ${antes('nombre')}
+          <label
+            >Precio bruto
+            <input type="number" name="precio" min="0" step="1" value="${texto('precio')}"
+          /></label>
+          ${antes('precio')} ${selectTipo(typeof tipo === 'string' ? tipo : null)} ${antes('tipo')}
+          ${campoCategoria(registro, typeof categoria === 'string' ? categoria : null)}
+          ${antes('categoria')}
+        </div>
+        <div class="filtros">${casilla('activo', 'Activo')} ${casilla('exento', 'Exento')}</div>
+        <button type="submit">Guardar cambios</button>
+        <p class="tenue">
+          El SKU no se edita: se cambia a mano en los tres sistemas. Sólo viajan los campos que
+          cambias. «Tipo» y «Exento» sólo se aceptan donde el conector puede escribirlos; si no, el
+          aviso de error lo explica.
+        </p>`,
+    )}
+  </section>`;
 }
 
 // --- Detalle ---
@@ -723,6 +932,7 @@ export function pantallaProducto(
 
   return html`<p><a href="${base}productos">← Productos</a></p>
     <h1>${sku}</h1>
+    ${d.pendientes.alta ? html`<p><span class="etiqueta aviso">pendiente de crear</span> <span class="tenue">Aún no existe en ningún sistema.</span></p>` : ''}
     <div class="ficha">
       ${foto(base, sku, registro.fotos(sku).length > 0, 'grande')}
       <dl>
@@ -768,7 +978,8 @@ export function pantallaProducto(
       <h2>Valores por sistema</h2>
       ${valores}
     </section>
-    ${escrituras} ${reglas} ${conflictos} ${empates} ${escrituraReciente} ${indice}`;
+    ${pendienteDe(d)} ${formularioEdicion(registro, d, sku, base, volver)} ${escrituras} ${reglas}
+    ${conflictos} ${empates} ${escrituraReciente} ${indice}`;
 }
 
 /** Fila de un conflicto con los botones «quedarse con el de…» si sigue abierto. */

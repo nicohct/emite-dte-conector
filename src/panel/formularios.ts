@@ -87,7 +87,44 @@ export function cuerpoDe(accion: NombreAccion, f: URLSearchParams): unknown {
     }
     case 'categorias':
       return { categorias: f.getAll('categoria'), fuera: f.get('fuera') === '1' };
+    case 'alta': {
+      const categoria = f.get('categoria')?.trim();
+      return {
+        sku: f.get('sku') ?? '',
+        nombre: f.get('nombre') ?? '',
+        precio: precioDe(f.get('precio')),
+        tipo: f.get('tipo') ?? '',
+        ...(categoria ? { categoria } : {}),
+        exento: f.has('exento'),
+        activo: f.has('activo'),
+        ...(f.has('aprobar_web') ? { visibilidad: 'aprobado' } : {}),
+      };
+    }
+    case 'edicion': {
+      const campos: Record<string, unknown> = {};
+      for (const campo of CAMPOS_TEXTO) {
+        if (!f.has(campo) && !f.has(`antes_${campo}`)) continue;
+        const ahora = f.get(campo) ?? '';
+        if (ahora === (f.get(`antes_${campo}`) ?? '')) continue;
+        campos[campo] = campo === 'precio' ? precioDe(ahora) : ahora;
+      }
+      for (const campo of CAMPOS_CASILLA) {
+        if (!f.has(`antes_${campo}`)) continue;
+        const ahora = f.has(campo);
+        if (ahora !== (f.get(`antes_${campo}`) === 'true')) campos[campo] = ahora;
+      }
+      return { sku: f.get('sku') ?? '', campos };
+    }
   }
+}
+
+const CAMPOS_TEXTO = ['nombre', 'precio', 'tipo', 'categoria'] as const;
+const CAMPOS_CASILLA = ['activo', 'exento'] as const;
+
+/** El precio como número; un texto vacío o no numérico pasa tal cual para que la acción lo rechace. */
+function precioDe(texto: string | null): number | string {
+  const t = (texto ?? '').trim();
+  return t !== '' && Number.isFinite(Number(t)) ? Number(t) : (texto ?? '');
 }
 
 const RUTA_VOLVER = new RegExp(

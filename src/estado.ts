@@ -49,17 +49,20 @@ export type FlujoEvento = 'cotizaciones' | 'productos';
 
 /**
  * Qué cuenta como evento: una cotización, un producto, un webhook visto y, del registro canónico,
- * un conflicto, un empate (propuesto o decidido) o una acción del panel.
+ * un conflicto, un empate (propuesto o decidido), una acción del panel o una escritura en un
+ * sistema.
  */
-export type TipoEvento = 'cotizacion' | 'producto' | 'webhook' | 'conflicto' | 'empate' | 'accion';
+export type TipoEvento =
+  'cotizacion' | 'producto' | 'webhook' | 'conflicto' | 'empate' | 'accion' | 'escritura';
 
 export interface Evento {
   flujo: FlujoEvento;
   tipo: TipoEvento;
   /**
    * `creada`/`error` (cotización), `sincronizado`/`omitido`/`error` (producto), `visto`
-   * (webhook), `abierto`/`resuelto` (conflicto), `propuesto`/`confirmado`/`rechazado` (empate) o
-   * el nombre de la acción.
+   * (webhook), `abierto`/`resuelto` (conflicto), `propuesto`/`confirmado`/`rechazado` (empate),
+   * el nombre de la acción o `escrito`/`revertido`/`creado`/`adoptado`/`fusionado`/`error`
+   * (escritura).
    */
   estado: string;
   en: string;
@@ -73,6 +76,9 @@ export interface Evento {
   referencia: string | null;
   /** Número de la cotización creada en Emite DTE; null en los demás tipos. */
   emiteNumero: number | null;
+  /** Sistema y campo escritos; null fuera de las escrituras (y el campo, al crear o fusionar). */
+  sistema: string | null;
+  campo: string | null;
 }
 
 export interface FiltroEventos {
@@ -274,6 +280,8 @@ export class Estado {
       mensaje: (f.mensaje as string | null) ?? null,
       referencia: (f.referencia as string | null) ?? null,
       emiteNumero: (f.emite_numero as number | null) ?? null,
+      sistema: (f.sistema as string | null) ?? null,
+      campo: (f.campo as string | null) ?? null,
     }));
   }
 
@@ -313,26 +321,31 @@ const EVENTOS_SQL = `
   SELECT 'cotizaciones' AS flujo, 'cotizacion' AS tipo, estado, actualizado_en AS en,
          quote_id AS id_externo, emite_id, NULL AS sku,
          CASE WHEN estado = 'error' THEN error ELSE quote_number END AS mensaje,
-         quote_number AS referencia, emite_numero
+         quote_number AS referencia, emite_numero, NULL AS sistema, NULL AS campo
   FROM cotizaciones
   UNION ALL
   SELECT 'productos', 'producto', estado, actualizado_en, product_id, emite_id, sku, error,
-         NULL, NULL
+         NULL, NULL, NULL, NULL
   FROM productos
   UNION ALL
-  SELECT 'cotizaciones', 'webhook', 'visto', visto_en, id, NULL, NULL, NULL, NULL, NULL
+  SELECT 'cotizaciones', 'webhook', 'visto', visto_en, id, NULL, NULL, NULL, NULL, NULL, NULL, NULL
   FROM webhooks_vistos
   UNION ALL
   SELECT 'productos', 'conflicto', estado, COALESCE(resuelto_en, abierto_en), CAST(id AS TEXT),
-         NULL, sku, campo, NULL, NULL
+         NULL, sku, campo, NULL, NULL, NULL, campo
   FROM catalogo_conflictos
   UNION ALL
   SELECT 'productos', 'empate', estado, COALESCE(decidido_en, propuesto_en), emite_id, emite_id,
-         sku, motivo, NULL, NULL
+         sku, motivo, NULL, NULL, NULL, NULL
   FROM catalogo_empates
   UNION ALL
-  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL, NULL, usuario, NULL, NULL
-  FROM catalogo_acciones`;
+  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL, NULL, usuario, NULL, NULL,
+         NULL, NULL
+  FROM catalogo_acciones
+  UNION ALL
+  SELECT 'productos', 'escritura', estado, en, id_externo,
+         CASE WHEN sistema = 'emite' THEN id_externo END, sku, mensaje, NULL, NULL, sistema, campo
+  FROM catalogo_eventos`;
 
 function condicionEventos(filtro: Omit<FiltroEventos, 'pagina' | 'porPagina'>): {
   where: string;

@@ -1,11 +1,19 @@
 /**
- * Las decisiones del panel sobre el catálogo (quién manda, empates, conflictos y visibilidad web),
- * con sus validaciones. Las usan la API JSON (`api.ts`) y los formularios del panel; en la fase 1a
- * sólo cambian el registro, no escriben en ningún sistema.
+ * Las decisiones del panel sobre el catálogo (quién manda, empates, conflictos, visibilidad web y
+ * categorías fuera de la web), con sus validaciones, y la importación de decisiones respaldadas.
+ * Las usan la API JSON (`api.ts`) y los formularios del panel. Sólo cambian el registro: lo que
+ * implican en los sistemas lo lleva la pasada de escritura siguiente.
  */
-import type { CampoCatalogo, RegistroCatalogo, SistemaCatalogo } from '../../estado-catalogo.js';
+import type {
+  CampoCatalogo,
+  Decisiones,
+  FuenteRegla,
+  RegistroCatalogo,
+  SistemaCatalogo,
+} from '../../estado-catalogo.js';
 import { CAMPOS_CATALOGO, SISTEMAS_CATALOGO } from '../../estado-catalogo.js';
 import { log } from '../../log.js';
+import { CAMPOS_ULTIMO_CAMBIO, modoDe } from './canonico.js';
 import { recalcular, recalcularEmpates, recalcularTodo } from './lectura.js';
 
 const MAX_LOTE = 500;
@@ -25,12 +33,13 @@ type Accion = (
   en: string,
 ) => ResultadoAccion;
 
-export type NombreAccion = 'reglas' | 'empates' | 'conflictos' | 'visibilidad';
+export type NombreAccion = 'reglas' | 'empates' | 'conflictos' | 'visibilidad' | 'categorias';
 export const NOMBRES_ACCIONES: readonly NombreAccion[] = [
   'reglas',
   'empates',
   'conflictos',
   'visibilidad',
+  'categorias',
 ];
 
 export const esAccion = (v: string): v is NombreAccion =>
@@ -69,17 +78,22 @@ function porCada(lista: unknown[], f: (item: unknown) => void): ResultadoAccion 
 
 export const ACCIONES: Record<NombreAccion, Accion> = {
   /**
-   * «Quién manda» en un campo: `{ campo, fuente, skus? }`. Sin `skus` es la regla de todo el
-   * catálogo; con `skus`, en lote para esos. `fuente: null` vuelve a la regla de arranque.
+   * «Quién manda» en un campo: `{ campo, fuente, skus? }`. `fuente` es el sistema propietario o
+   * `ultimo` (último cambio, sólo en nombre, precio y activo). Sin `skus` es la regla de todo el
+   * catálogo; con `skus`, en lote para esos. `fuente: null` vuelve al modo por omisión.
    */
   reglas(registro, cuerpo, usuario, en) {
     if (!esObjeto(cuerpo)) throw new ErrorPeticion('se esperaba un objeto');
-    const { campo, fuente, skus } = cuerpo;
+    const { campo, skus } = cuerpo;
     if (typeof campo !== 'string' || !(CAMPOS_CATALOGO as readonly string[]).includes(campo)) {
       throw new ErrorPeticion(`campo debe ser uno de ${CAMPOS_CATALOGO.join(', ')}`);
     }
-    if (fuente !== null && !esSistema(fuente)) {
-      throw new ErrorPeticion(`fuente debe ser ${SISTEMAS_CATALOGO.join(', ')} o null`);
+    const fuente = cuerpo.fuente as FuenteRegla | null;
+    if (fuente !== null && fuente !== 'ultimo' && !esSistema(fuente)) {
+      throw new ErrorPeticion(`fuente debe ser ${SISTEMAS_CATALOGO.join(', ')}, ultimo o null`);
+    }
+    if (fuente === 'ultimo' && !CAMPOS_ULTIMO_CAMBIO.includes(campo as CampoCatalogo)) {
+      throw new ErrorPeticion(`«último cambio» sólo vale para ${CAMPOS_ULTIMO_CAMBIO.join(', ')}`);
     }
     if (skus === undefined) {
       registro.guardarRegla('*', campo as CampoCatalogo, fuente, usuario, en);
@@ -121,7 +135,9 @@ export const ACCIONES: Record<NombreAccion, Accion> = {
 
   /**
    * `{ resoluciones: [{ id, fuente }] }`: el campo del conflicto queda con el valor de `fuente`
-   * («quedarse con el de la web / Coreinbox / Emite DTE») como regla de ese SKU.
+   * («quedarse con el de la web / Coreinbox / Emite DTE») y la escritura siguiente lo lleva a los
+   * demás. En «último cambio» el elegido pasa a ser el último cambio (el campo sigue en ese modo);
+   * en un campo con propietario queda como regla de ese SKU.
    */
   conflictos(registro, cuerpo, usuario, en) {
     return porCada(lote(cuerpo, 'resoluciones'), (d) => {
@@ -134,7 +150,9 @@ export const ACCIONES: Record<NombreAccion, Accion> = {
       if (!esSistema(fuente) || !registro.lecturas(conflicto.sku)[fuente]) {
         throw new ErrorPeticion(`el SKU ${conflicto.sku} no está en ${String(fuente)}`);
       }
-      registro.guardarRegla(conflicto.sku, conflicto.campo, fuente, usuario, en);
+      const modo = modoDe(registro.reglas(), conflicto.sku, conflicto.campo).modo;
+      if (modo === 'ultimo') registro.elegirCambio(conflicto.sku, conflicto.campo, fuente, en);
+      else registro.guardarRegla(conflicto.sku, conflicto.campo, fuente, usuario, en);
       registro.resolverConflicto(conflicto.id, fuente, usuario, en);
       recalcular(registro, conflicto.sku);
     });
@@ -158,7 +176,88 @@ export const ACCIONES: Record<NombreAccion, Accion> = {
       recalcular(registro, sku);
     });
   },
+
+  /**
+   * `{ categorias: [...], fuera: true | false }`: categorías de Coreinbox (por nombre) cuyos
+   * productos no van a la web salvo aprobación por SKU (`fuera: false` las devuelve).
+   */
+  categorias(registro, cuerpo, usuario, en) {
+    const fuera = esObjeto(cuerpo) ? cuerpo.fuera : undefined;
+    if (typeof fuera !== 'boolean') throw new ErrorPeticion('fuera debe ser true o false');
+    const r = porCada(lote(cuerpo, 'categorias'), (c) => {
+      if (typeof c !== 'string' || !c.trim()) throw new ErrorPeticion('categoría vacía');
+      registro.marcarCategoria(c.trim(), fuera, usuario, en);
+    });
+    recalcularTodo(registro);
+    return r;
+  },
 };
+
+const esLista = (v: unknown): v is unknown[] => Array.isArray(v);
+
+/**
+ * Valida un respaldo de `GET /catalogo/decisiones` y lo repone (idempotente). Anota la importación
+ * en la bitácora como acción `decisiones`.
+ */
+export function importarDecisiones(
+  registro: RegistroCatalogo,
+  cuerpo: unknown,
+  usuario: string | null,
+  en: string,
+): Record<string, number> {
+  if (!esObjeto(cuerpo) || cuerpo.version !== 1) {
+    throw new ErrorPeticion('se esperaba un respaldo de decisiones con version 1');
+  }
+  const claves = ['reglas', 'empates', 'conflictos', 'visibilidad', 'categoriasFuera'] as const;
+  for (const clave of claves) {
+    if (!esLista(cuerpo[clave])) throw new ErrorPeticion(`falta la lista «${clave}»`);
+  }
+  const d = cuerpo as unknown as Decisiones;
+  for (const r of d.reglas as unknown[]) {
+    if (!esObjeto(r) || typeof r.ambito !== 'string')
+      throw new ErrorPeticion('una regla no es válida');
+    if (r.fuente !== 'ultimo' && !esSistema(r.fuente)) {
+      throw new ErrorPeticion(`una regla tiene una fuente desconocida: ${String(r.fuente)}`);
+    }
+    if (typeof r.campo !== 'string' || !(CAMPOS_CATALOGO as readonly string[]).includes(r.campo)) {
+      throw new ErrorPeticion(`una regla tiene un campo desconocido: ${String(r.campo)}`);
+    }
+  }
+  for (const e of d.empates as unknown[]) {
+    if (!esObjeto(e) || typeof e.emiteId !== 'string' || typeof e.sku !== 'string') {
+      throw new ErrorPeticion('un empate no es válido');
+    }
+    if (e.estado !== 'confirmado' && e.estado !== 'rechazado') {
+      throw new ErrorPeticion('un empate debe estar confirmado o rechazado');
+    }
+  }
+  for (const c of d.conflictos as unknown[]) {
+    if (!esObjeto(c) || typeof c.sku !== 'string' || typeof c.abiertoEn !== 'string') {
+      throw new ErrorPeticion('un conflicto no es válido');
+    }
+  }
+  for (const v of d.visibilidad as unknown[]) {
+    if (!esObjeto(v) || typeof v.sku !== 'string') {
+      throw new ErrorPeticion('una visibilidad no es válida');
+    }
+    if (v.estado !== 'aprobado' && v.estado !== 'rechazado') {
+      throw new ErrorPeticion('una visibilidad debe ser aprobado o rechazado');
+    }
+  }
+  for (const c of d.categoriasFuera as unknown[]) {
+    if (!esObjeto(c) || typeof c.categoria !== 'string') {
+      throw new ErrorPeticion('una categoría no es válida');
+    }
+  }
+  const resultado = registro.transaccion(() => {
+    const n = registro.importarDecisiones(d);
+    recalcularTodo(registro);
+    return n;
+  });
+  registro.registrarAccion('decisiones', usuario, resultado, en);
+  log('info', 'decisiones del catálogo importadas', { usuario, ...resultado });
+  return resultado;
+}
 
 /**
  * Aplica una acción en una transacción y la anota en la bitácora (queda como evento `accion`).

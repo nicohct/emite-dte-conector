@@ -1,11 +1,12 @@
 /**
  * Lo que el conector recuerda entre pasadas, en SQLite (`node:sqlite`, sin dependencias): los
  * cursores de sincronización (cotizaciones y productos), qué cotización de Coreinbox quedó en
- * Emite DTE (o con qué error), qué producto pasó al catálogo (o por qué se omitió) y qué webhooks
- * ya se procesaron.
+ * Emite DTE (o con qué error), qué producto pasó al catálogo (o por qué se omitió), qué webhooks
+ * ya se procesaron y el registro canónico del catálogo (`estado.catalogo`, en `estado-catalogo.ts`).
  */
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { RegistroCatalogo } from './estado-catalogo.js';
 
 // `process.getBuiltinModule` en vez de `import`: las herramientas que analizan los imports (vite,
 // vitest) todavía no reconocen `node:sqlite` como módulo nativo.
@@ -42,6 +43,40 @@ export interface FilaProducto {
   actualizadoEn: string;
 }
 
+export type FlujoEvento = 'cotizaciones' | 'productos';
+
+/**
+ * Qué cuenta como evento: una cotización, un producto, un webhook visto y, del registro canónico,
+ * un conflicto, un empate (propuesto o decidido) o una acción del panel.
+ */
+export type TipoEvento = 'cotizacion' | 'producto' | 'webhook' | 'conflicto' | 'empate' | 'accion';
+
+export interface Evento {
+  flujo: FlujoEvento;
+  tipo: TipoEvento;
+  /**
+   * `creada`/`error` (cotización), `sincronizado`/`omitido`/`error` (producto), `visto`
+   * (webhook), `abierto`/`resuelto` (conflicto), `propuesto`/`confirmado`/`rechazado` (empate) o
+   * el nombre de la acción.
+   */
+  estado: string;
+  en: string;
+  /** Id en el sistema de origen (cotización o producto de Coreinbox, webhook, histórico…). */
+  idExterno: string | null;
+  emiteId: string | null;
+  sku: string | null;
+  /** Error, motivo, número de cotización, campo en conflicto o usuario de la acción. */
+  mensaje: string | null;
+}
+
+export interface FiltroEventos {
+  flujo?: FlujoEvento;
+  estado?: string;
+  /** Desde 1. */
+  pagina?: number;
+  porPagina?: number;
+}
+
 export interface Resumen {
   creadas: number;
   conError: number;
@@ -50,6 +85,8 @@ export interface Resumen {
 
 export class Estado {
   private readonly db: DatabaseSync;
+  /** Registro canónico de productos por SKU (fase 1 del hub). */
+  readonly catalogo: RegistroCatalogo;
 
   constructor(ruta: string) {
     if (ruta !== ':memory:') mkdirSync(dirname(ruta), { recursive: true });
@@ -79,6 +116,10 @@ export class Estado {
       );
       CREATE TABLE IF NOT EXISTS webhooks_vistos (id TEXT PRIMARY KEY, visto_en TEXT NOT NULL);
     `);
+    this.catalogo = new RegistroCatalogo(this.db, {
+      leer: (nombre) => this.clave(nombre),
+      guardar: (nombre, valor) => this.guardarClave(nombre, valor),
+    });
   }
 
   /** Cursor de las cotizaciones aceptadas. */
@@ -202,6 +243,38 @@ export class Estado {
     };
   }
 
+  /** Lo último que pasó en los flujos, más reciente primero y paginado (de a 50 por omisión). */
+  eventos(filtro: FiltroEventos = {}): Evento[] {
+    const { where, args } = condicionEventos(filtro);
+    const porPagina = Math.min(500, Math.max(1, Math.trunc(filtro.porPagina ?? 50)));
+    const pagina = Math.max(1, Math.trunc(filtro.pagina ?? 1));
+    const filas = this.db
+      .prepare(
+        `SELECT * FROM (${EVENTOS_SQL}) ${where}
+         ORDER BY en DESC, tipo, id_externo LIMIT ? OFFSET ?`,
+      )
+      .all(...args, porPagina, (pagina - 1) * porPagina) as Array<Record<string, unknown>>;
+    return filas.map((f) => ({
+      flujo: f.flujo as FlujoEvento,
+      tipo: f.tipo as TipoEvento,
+      estado: f.estado as string,
+      en: f.en as string,
+      idExterno: (f.id_externo as string | null) ?? null,
+      emiteId: (f.emite_id as string | null) ?? null,
+      sku: (f.sku as string | null) ?? null,
+      mensaje: (f.mensaje as string | null) ?? null,
+    }));
+  }
+
+  /** Total de eventos con el mismo filtro, para paginar. */
+  contar(filtro: Omit<FiltroEventos, 'pagina' | 'porPagina'> = {}): number {
+    const { where, args } = condicionEventos(filtro);
+    const fila = this.db
+      .prepare(`SELECT COUNT(*) AS n FROM (${EVENTOS_SQL}) ${where}`)
+      .get(...args) as { n: number };
+    return fila.n;
+  }
+
   cerrar(): void {
     this.db.close();
   }
@@ -222,6 +295,46 @@ export class Estado {
         .run(nombre, valor);
     }
   }
+}
+
+/** Todas las tablas con fecha, en una sola forma; los webhooks son del flujo de cotizaciones. */
+const EVENTOS_SQL = `
+  SELECT 'cotizaciones' AS flujo, 'cotizacion' AS tipo, estado, actualizado_en AS en,
+         quote_id AS id_externo, emite_id, NULL AS sku,
+         CASE WHEN estado = 'error' THEN error ELSE quote_number END AS mensaje
+  FROM cotizaciones
+  UNION ALL
+  SELECT 'productos', 'producto', estado, actualizado_en, product_id, emite_id, sku, error
+  FROM productos
+  UNION ALL
+  SELECT 'cotizaciones', 'webhook', 'visto', visto_en, id, NULL, NULL, NULL FROM webhooks_vistos
+  UNION ALL
+  SELECT 'productos', 'conflicto', estado, COALESCE(resuelto_en, abierto_en), CAST(id AS TEXT),
+         NULL, sku, campo
+  FROM catalogo_conflictos
+  UNION ALL
+  SELECT 'productos', 'empate', estado, COALESCE(decidido_en, propuesto_en), emite_id, emite_id,
+         sku, motivo
+  FROM catalogo_empates
+  UNION ALL
+  SELECT 'productos', 'accion', accion, en, CAST(id AS TEXT), NULL, NULL, usuario
+  FROM catalogo_acciones`;
+
+function condicionEventos(filtro: Omit<FiltroEventos, 'pagina' | 'porPagina'>): {
+  where: string;
+  args: string[];
+} {
+  const donde: string[] = [];
+  const args: string[] = [];
+  if (filtro.flujo) {
+    donde.push('flujo = ?');
+    args.push(filtro.flujo);
+  }
+  if (filtro.estado) {
+    donde.push('estado = ?');
+    args.push(filtro.estado);
+  }
+  return { where: donde.length > 0 ? `WHERE ${donde.join(' AND ')}` : '', args };
 }
 
 function desdeFila(f: Record<string, unknown>): FilaCotizacion {

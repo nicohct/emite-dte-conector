@@ -1,10 +1,12 @@
 import { Coreinbox } from './adaptadores/coreinbox/cliente.js';
 import { EmiteDte } from './adaptadores/emite/cliente.js';
+import { WooCommerce } from './adaptadores/woocommerce/cliente.js';
 import { leerConfig } from './config.js';
 import { Estado } from './estado.js';
 import { esTransitorio } from './flujos/comun.js';
 import { pasada } from './flujos/cotizaciones/pasada.js';
-import { pasadaProductos } from './flujos/productos/pasada.js';
+import { atenderCatalogo, configurarCatalogo } from './flujos/productos/api.js';
+import { pasadaCatalogo } from './flujos/productos/catalogo.js';
 import { log } from './log.js';
 import { crearPanel } from './panel/index.js';
 import { Salud } from './salud.js';
@@ -15,7 +17,9 @@ for (const aviso of config.avisos) log('warn', aviso);
 const estado = new Estado(config.estadoRuta);
 const coreinbox = new Coreinbox(config.coreinbox.url, config.coreinbox.apiKey);
 const emite = new EmiteDte(config.emite.url, config.emite.apiKey);
+const woocommerce = config.woocommerce ? new WooCommerce(config.woocommerce) : null;
 const salud = new Salud(estado, config.flujos);
+configurarCatalogo({ estado, clave: config.catalogoApiKey });
 
 const servidor = crearServidor(
   {
@@ -32,6 +36,7 @@ const servidor = crearServidor(
       estadoRuta: config.estadoRuta,
       enlaces: { emite: config.emite.urlPublica },
     }),
+    atenderCatalogo,
   ],
 );
 servidor.listen(config.puerto, () =>
@@ -90,14 +95,16 @@ async function bucle() {
       await correr(
         'productos',
         () =>
-          pasadaProductos({
+          pasadaCatalogo({
             coreinbox,
             emite,
+            woocommerce,
             estado,
             emisorId: config.emite.emisorId,
+            escribir: config.productos.escribir,
             desde: config.desde,
           }),
-        (r) => r.revisados > 0,
+        (r) => r.camposCambiados > 0 || (r.revisados ?? 0) > 0,
         {
           terminada: 'pasada de productos terminada',
           fallida: 'la pasada de productos falló; se reintenta en el intervalo siguiente',

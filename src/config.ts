@@ -19,6 +19,13 @@ export interface Config {
   desde: string;
   /** Qué flujos corren en cada pasada. `pedidos` queda en `false` hasta que exista. */
   flujos: Record<NombreFlujo, boolean>;
+  /**
+   * Catálogo de productos. Con `escribir` en `false` (por omisión) la pasada sólo lee los tres
+   * sistemas; en `true` además lleva Coreinbox → Emite DTE como antes de la fase 1.
+   */
+  productos: { escribir: boolean };
+  /** Clave de `GET /catalogo` y sus acciones; `null` deja esas rutas sin montar (404). */
+  catalogoApiKey: string | null;
   /** Para el log al arrancar: variables obsoletas o flujos pedidos que todavía no existen. */
   avisos: string[];
   intervaloS: number;
@@ -78,6 +85,8 @@ export function leerConfig(env: NodeJS.ProcessEnv = process.env): Config {
     woocommerce: configWooDesdeEnv(env),
     desde,
     flujos: { cotizaciones: bandera('FLUJO_COTIZACIONES', true), productos, pedidos: false },
+    productos: { escribir: bandera('PRODUCTOS_ESCRIBIR', false) },
+    catalogoApiKey: env.CATALOGO_API_KEY?.trim() || null,
     avisos,
     intervaloS: Math.max(10, Number(env.INTERVALO_S) || 60),
     puerto: Number(env.PUERTO) || 8080,

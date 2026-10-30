@@ -7,6 +7,7 @@
  * mensaje (puede traer datos del otro sistema); el mensaje completo queda en el log.
  */
 import type { NombreFlujo } from './config.js';
+import type { ResumenCatalogo } from './estado-catalogo.js';
 import type { Estado, Resumen } from './estado.js';
 
 export interface UltimaPasada {
@@ -46,6 +47,8 @@ export interface RespuestaSalud extends Resumen {
       sincronizados: number;
       omitidos: number;
       conError: number;
+      /** Registro canónico: leídos por sistema, con diferencias, en conflicto, empates, sin SKU. */
+      catalogo: ResumenCatalogo;
     } & Actividad;
     pedidos: { activo: false };
   };
@@ -99,6 +102,7 @@ export class Salud {
           activo: this.activos.productos,
           cursor: this.estado.cursorProductos,
           ...r.productos,
+          catalogo: this.estado.catalogo.resumen(),
           ...this.actividad.productos,
         },
         pedidos: { activo: false },

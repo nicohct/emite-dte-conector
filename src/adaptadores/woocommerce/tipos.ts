@@ -21,6 +21,42 @@ export interface ProductoWoo {
   date_modified: string;
   /** Misma fecha en UTC; es la que se usa como cursor de sincronización. */
   date_modified_gmt: string;
+  /** Lo que sigue lo usa el catálogo; WooCommerce siempre lo manda, los dobles a veces no. */
+  permalink?: string;
+  /** `simple`, `variable`, `grouped` o `external`. */
+  type?: string;
+  /** `visible`, `catalog`, `search` o `hidden`. */
+  catalog_visibility?: string;
+  description?: string;
+  short_description?: string;
+  categories?: CategoriaProductoWoo[];
+  images?: ImagenWoo[];
+  attributes?: AtributoWoo[];
+  meta_data?: MetaWoo[];
+}
+
+export interface CategoriaProductoWoo {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+export interface ImagenWoo {
+  id: number;
+  src: string;
+  name?: string;
+}
+
+export interface AtributoWoo {
+  id: number;
+  name: string;
+  options: string[];
+}
+
+export interface MetaWoo {
+  id: number;
+  key: string;
+  value: unknown;
 }
 
 export interface FacturacionWoo {
@@ -58,7 +94,7 @@ export interface PedidoWoo {
   billing: FacturacionWoo;
   line_items: LineaPedidoWoo[];
   shipping_total: string;
-  meta_data: Array<{ id: number; key: string; value: unknown }>;
+  meta_data: MetaWoo[];
 }
 
 /** Lo único que el plan escribe en un producto de WooCommerce. */

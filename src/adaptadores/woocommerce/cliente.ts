@@ -173,6 +173,16 @@ export class WooCommerce {
     ).data;
   }
 
+  /** URL del producto en la API REST (pide la clave para leerla). */
+  urlProducto(id: number): string {
+    return `${this.base}/products/${id}`;
+  }
+
+  /** URL de una categoría de productos en la API REST. */
+  urlCategoria(id: number): string {
+    return `${this.base}/products/categories/${id}`;
+  }
+
   async actualizarProducto(id: number, cambios: CambiosProductoWoo): Promise<ProductoWoo> {
     exigirIdPositivo('id del producto', id);
     return (await this.pedir<ProductoWoo>('PUT', `/products/${id}`, cambios)).data;

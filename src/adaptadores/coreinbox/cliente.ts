@@ -142,9 +142,9 @@ export class ErrorCoreinbox extends Error {
     super(message);
     this.name = 'ErrorCoreinbox';
   }
-  /** 5xx o límite de peticiones: vale la pena volver a intentar. */
+  /** Red caída (`status` 0), 5xx o límite de peticiones: vale la pena volver a intentar. */
   get transitorio(): boolean {
-    return this.status >= 500 || this.status === 429;
+    return this.status === 0 || this.status >= 500 || this.status === 429;
   }
 }
 

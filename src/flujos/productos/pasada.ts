@@ -19,7 +19,7 @@ import type { CambiosProducto, EmiteDte, ProductoEmite } from '../../adaptadores
 import { ErrorEmite } from '../../adaptadores/emite/cliente.js';
 import type { Estado } from '../../estado.js';
 import { log } from '../../log.js';
-import { ErrorMapeo, MARGEN_CURSOR_MS } from '../comun.js';
+import { ErrorMapeo, MARGEN_CURSOR_MS, esTransitorio } from '../comun.js';
 import { armarProducto } from './mapeo.js';
 
 export interface DependenciasProductos {
@@ -165,7 +165,7 @@ async function procesar(
     log('info', 'producto creado en Emite DTE', { ...contexto, codigo: creado.codigo, avisos });
     return 'creados';
   } catch (e) {
-    if ((e instanceof ErrorEmite || e instanceof ErrorCoreinbox) && e.transitorio) {
+    if (esTransitorio(e)) {
       log('warn', 'falla transitoria; se reintenta en la pasada siguiente', {
         ...contexto,
         error: e.message,

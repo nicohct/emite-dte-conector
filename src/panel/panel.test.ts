@@ -611,6 +611,20 @@ describe('panel: rutas y métodos', () => {
     expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
     expect(res.headers.get('content-security-policy')).toContain("img-src 'self'");
   });
+
+  it('referrer-policy same-origin en las páginas y en la redirección de una acción', async () => {
+    const base = await levantar();
+    const { res } = await pedir(`${base}/panel/flujos`);
+    expect(res.headers.get('referrer-policy')).toBe('same-origin');
+    const accion = await fetch(`${base}/panel/acciones/visibilidad`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ volver: 'visibilidad', estado: 'aprobado' }).toString(),
+      redirect: 'manual',
+    });
+    expect(accion.status).toBe(303);
+    expect(accion.headers.get('referrer-policy')).toBe('same-origin');
+  });
 });
 
 describe('panel montado junto al resto del servidor', () => {

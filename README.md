@@ -491,6 +491,11 @@ y usan la misma lógica que la API JSON (`src/flujos/productos/acciones.ts`). No
 usuario de la decisión. Tras aplicar, redirigen (303) a la pantalla de origen con el resultado
 (aplicadas y errores). Cada acción queda en la bitácora y aparece como evento `accion`.
 
+El panel responde con `Referrer-Policy: same-origin`: con `no-referrer` el navegador manda
+`Origin: null` en los envíos de formulario, y tanto el guardia de Emite DTE como el del panel los
+rechazan con 403. Con `same-origin` el `Origin` va completo y nada se filtra a terceros (los
+enlaces externos llevan `rel="noreferrer"`).
+
 Las decisiones cambian el registro del conector; con `PRODUCTOS_ESCRIBIR=true`, la pasada siguiente
 las lleva a Coreinbox, la web y Emite DTE.
 

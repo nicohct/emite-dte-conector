@@ -27,8 +27,11 @@ async function escrito(mundo: Mundo = mundoInicial()) {
 const de = (escrituras: Array<{ ruta: string; cuerpo: Record<string, unknown> }>, sku: string) =>
   escrituras.filter((e) => e.cuerpo.sku === sku || e.cuerpo.codigo === sku);
 
-const alta = (m: { estado: Estado }, cuerpo: Record<string, unknown>, usuario: string | null = ANA) =>
-  aplicarAccion(m.estado.catalogo, 'alta', cuerpo, usuario, EN);
+const alta = (
+  m: { estado: Estado },
+  cuerpo: Record<string, unknown>,
+  usuario: string | null = ANA,
+) => aplicarAccion(m.estado.catalogo, 'alta', cuerpo, usuario, EN);
 
 const edicion = (m: { estado: Estado }, sku: string, campos: Record<string, unknown>, en = EN) =>
   aplicarAccion(m.estado.catalogo, 'edicion', { sku, campos }, ANA, en);
@@ -47,7 +50,11 @@ describe('alta desde el panel', () => {
     const m = await leido();
     alta(m, CODO);
     const r = m.estado.catalogo;
-    expect(r.alta('SKU-100')).toMatchObject({ nombre: 'Codo bronce 1/2', precio: 2380, usuario: ANA });
+    expect(r.alta('SKU-100')).toMatchObject({
+      nombre: 'Codo bronce 1/2',
+      precio: 2380,
+      usuario: ANA,
+    });
     const pendiente = r.producto('SKU-100');
     expect(pendiente).toMatchObject({
       presentes: [],
@@ -172,7 +179,13 @@ describe('alta desde el panel', () => {
 
   it('en una categoría fuera de la web nace rechazado, salvo que el alta lo apruebe', async () => {
     const m = await leido();
-    aplicarAccion(m.estado.catalogo, 'categorias', { categorias: ['Válvulas'], fuera: true }, null, EN);
+    aplicarAccion(
+      m.estado.catalogo,
+      'categorias',
+      { categorias: ['Válvulas'], fuera: true },
+      null,
+      EN,
+    );
     alta(m, { ...CODO, sku: 'SKU-101', nombre: 'Codo 3/4', visibilidad: undefined });
     alta(m, { ...CODO, sku: 'SKU-102', nombre: 'Codo 1' });
     expect(m.estado.catalogo.producto('SKU-101')).toMatchObject({
@@ -184,7 +197,10 @@ describe('alta desde el panel', () => {
       visibilidadWeb: 'aprobado',
       motivoVisibilidad: 'decision',
     });
-    expect(m.estado.catalogo.visibilidadDecidida('SKU-102')).toMatchObject({ estado: 'aprobado', usuario: ANA });
+    expect(m.estado.catalogo.visibilidadDecidida('SKU-102')).toMatchObject({
+      estado: 'aprobado',
+      usuario: ANA,
+    });
   });
 
   it('rechaza un SKU tomado, el nombre de un «sin SKU», el código de un histórico y datos inválidos', async () => {
@@ -216,7 +232,10 @@ describe('alta desde el panel', () => {
     const m = await leido();
     alta(m, CODO);
     edicion(m, 'SKU-100', { precio: 2500, nombre: 'Codo bronce 1/2 HE' });
-    expect(m.estado.catalogo.alta('SKU-100')).toMatchObject({ precio: 2500, nombre: 'Codo bronce 1/2 HE' });
+    expect(m.estado.catalogo.alta('SKU-100')).toMatchObject({
+      precio: 2500,
+      nombre: 'Codo bronce 1/2 HE',
+    });
     expect(m.estado.catalogo.pendientes('SKU-100')).toEqual([]);
     expect(m.estado.catalogo.producto('SKU-100')?.canonico.precio?.valor).toBe(2500);
   });
@@ -342,7 +361,9 @@ describe('edición desde el panel', () => {
     expect(() => edicion(m, 'SKU-404', { precio: 1 })).toThrow('no existe el SKU SKU-404');
     expect(() => edicion(m, 'SKU-001', {})).toThrow('al menos un campo');
     expect(() => edicion(m, 'SKU-001', { precio: '6000' })).toThrow('bruto entero');
-    expect(() => edicion(m, 'SKU-001', { categoria: 'Otra' })).toThrow('no está entre las de Coreinbox');
+    expect(() => edicion(m, 'SKU-001', { categoria: 'Otra' })).toThrow(
+      'no está entre las de Coreinbox',
+    );
     // Una edición válida junto a una inválida no deja nada.
     expect(() => edicion(m, 'SKU-001', { precio: 6000, tipo: 'servicio' })).toThrow();
     expect(r.pendientes()).toEqual([]);
@@ -396,9 +417,10 @@ describe('API JSON y respaldo con la escritura apagada', () => {
   it('las pendientes se acumulan sin que nada salga, se ven y se respaldan con las decisiones', async () => {
     const m = await leido();
     const pedir = await api(m.estado);
-    expect(
-      await pedir('/catalogo/acciones/alta', { metodo: 'POST', cuerpo: CODO }),
-    ).toMatchObject({ status: 200, cuerpo: { aplicadas: 1, errores: [] } });
+    expect(await pedir('/catalogo/acciones/alta', { metodo: 'POST', cuerpo: CODO })).toMatchObject({
+      status: 200,
+      cuerpo: { aplicadas: 1, errores: [] },
+    });
     expect(
       await pedir('/catalogo/acciones/edicion', {
         metodo: 'POST',
@@ -406,7 +428,10 @@ describe('API JSON y respaldo con la escritura apagada', () => {
       }),
     ).toMatchObject({ status: 200, cuerpo: { aplicadas: 1 } });
     expect(
-      await pedir('/catalogo/acciones/alta', { metodo: 'POST', cuerpo: { ...CODO, sku: 'SKU-001' } }),
+      await pedir('/catalogo/acciones/alta', {
+        metodo: 'POST',
+        cuerpo: { ...CODO, sku: 'SKU-001' },
+      }),
     ).toMatchObject({ status: 400, cuerpo: { error: 'ya existe el SKU SKU-001' } });
 
     await m.pasada();
@@ -451,7 +476,14 @@ describe('API JSON y respaldo con la escritura apagada', () => {
     expect(
       await pedir('/catalogo/decisiones', {
         metodo: 'POST',
-        cuerpo: { version: 1, reglas: [], empates: [], conflictos: [], visibilidad: [], categoriasFuera: [] },
+        cuerpo: {
+          version: 1,
+          reglas: [],
+          empates: [],
+          conflictos: [],
+          visibilidad: [],
+          categoriasFuera: [],
+        },
       }),
     ).toMatchObject({ status: 200, cuerpo: { importadas: { altas: 0, pendientes: 0 } } });
   });

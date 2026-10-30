@@ -1,4 +1,4 @@
-/** Receptor HTTP de los webhooks de Emite DTE (`POST /webhooks`) y `GET /salud`. */
+/** Receptor HTTP de los webhooks de Emite DTE (`POST /webhooks`), `GET /salud` y las rutas montadas (el panel). */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Coreinbox } from './adaptadores/coreinbox/cliente.js';
 import { verificarFirma } from './adaptadores/emite/firma.js';
@@ -14,12 +14,26 @@ export interface DependenciasServidor {
   tipoActividad: string;
 }
 
+/**
+ * Un grupo de rutas montado en el servidor (el panel, por ejemplo): atiende la petición y devuelve
+ * true, o devuelve false si la ruta no es suya. Se prueban en orden antes de `/salud` y `/webhooks`.
+ */
+export type Rutas = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+) => boolean | Promise<boolean>;
+
 const MAX_CUERPO = 256 * 1024;
 
 /** `salud` arma la respuesta de `GET /salud` (ver `salud.ts`). */
-export function crearServidor(d: DependenciasServidor, salud: () => unknown): Server {
+export function crearServidor(
+  d: DependenciasServidor,
+  salud: () => unknown,
+  rutas: Rutas[] = [],
+): Server {
   return createServer((req, res) => {
-    void atender(d, salud, req, res).catch((e) => {
+    void atender(d, salud, rutas, req, res).catch((e) => {
       log('error', 'error atendiendo la petición', { error: String(e) });
       responder(res, 500, { error: 'interno' });
     });
@@ -29,10 +43,12 @@ export function crearServidor(d: DependenciasServidor, salud: () => unknown): Se
 async function atender(
   d: DependenciasServidor,
   salud: () => unknown,
+  rutas: Rutas[],
   req: IncomingMessage,
   res: ServerResponse,
 ) {
   const url = new URL(req.url ?? '/', 'http://conector');
+  for (const atenderRutas of rutas) if (await atenderRutas(req, res, url)) return;
   if (req.method === 'GET' && url.pathname === '/salud') {
     return responder(res, 200, salud());
   }

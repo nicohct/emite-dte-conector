@@ -6,6 +6,7 @@ import { esTransitorio } from './flujos/comun.js';
 import { pasada } from './flujos/cotizaciones/pasada.js';
 import { pasadaProductos } from './flujos/productos/pasada.js';
 import { log } from './log.js';
+import { crearPanel } from './panel/index.js';
 import { Salud } from './salud.js';
 import { crearServidor } from './servidor.js';
 
@@ -25,6 +26,13 @@ const servidor = crearServidor(
     tipoActividad: config.coreinbox.tipoActividad,
   },
   () => salud.respuesta(),
+  [
+    crearPanel({
+      salud: () => salud.respuesta(),
+      estadoRuta: config.estadoRuta,
+      enlaces: { emite: config.emite.urlPublica },
+    }),
+  ],
 );
 servidor.listen(config.puerto, () =>
   log('info', 'conector escuchando', {

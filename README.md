@@ -260,6 +260,33 @@ El estado (cursores, cotizaciones pasadas, productos sincronizados, webhooks vis
 `ESTADO_RUTA` (SQLite); borrarlo obliga a volver a empezar desde `DESDE`, sin duplicar nada en
 Emite DTE.
 
+## Panel
+
+El conector sirve un panel de sólo lectura en `/panel`. Es HTML generado por el propio proceso, sin
+JavaScript ni dependencias.
+
+- **Flujos** (`/panel` o `/panel/flujos`): por flujo (cotizaciones, productos, pedidos) si está
+  activo, su cursor, contadores, última pasada, última falla con código, status y si fue transitoria,
+  y los errores recientes.
+- **Eventos** (`/panel/eventos`): lo último que pasó por el conector, en orden inverso (cotizaciones
+  creadas o con error, webhooks recibidos, productos sincronizados u omitidos con su motivo). Filtros
+  por consulta: `?flujo=cotizaciones|productos&estado=creada|visto|sincronizado|omitido|error`, y
+  paginación con `?pagina=2` (50 por página). Los enlaces a la cotización en Emite DTE usan
+  `EMITE_URL_PUBLICA`.
+
+Se verá dentro de Emite DTE, en Administración → «Integraciones», cuando el núcleo tenga esa sección:
+reenvía `/integraciones/conector/…` al conector y agrega la cabecera `X-Emite-Usuario`, que el panel
+muestra como «viendo como …». Por eso todos los enlaces son relativos.
+
+Mientras tanto se prueba en local con `pnpm dev` y se abre http://localhost:8080/panel (o el `PUERTO`
+configurado).
+
+**No tiene autenticación propia: no debe exponerse a Internet.** Sólo se alcanza por la red interna
+del compose.
+
+Lee el mismo SQLite del estado en modo de sólo lectura. La última pasada y la última falla viven en
+memoria y se pierden al reiniciar.
+
 ## Qué no hace (todavía)
 
 - No muestra el folio como insignia ni adjunta el PDF en Coreinbox: lo anota como actividad con

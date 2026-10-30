@@ -25,7 +25,7 @@ import {
   pantallaReglas,
   pantallaVisibilidad,
 } from './decisiones.js';
-import { avisoDe, cuerpoDe, destino, mismoOrigen } from './formularios.js';
+import { anclaDe, avisoDe, cuerpoDe, destino, mismoOrigen } from './formularios.js';
 import { html, pagina, type Html, type Marco, type Seccion } from './html.js';
 import { crearMiniaturas, type DescargaImagen } from './imagen.js';
 import {
@@ -131,7 +131,11 @@ export function crearPanel(d: DependenciasPanel) {
         html200('Eventos', 'eventos', pantallaEventos(datos, f, d.enlaces, base));
       } else if (ruta === 'productos') {
         const f = filtroCatalogoDe(url.searchParams, POR_PAGINA);
-        html200('Productos', 'productos', pantallaProductos(registro, f, base));
+        html200(
+          'Productos',
+          'productos',
+          pantallaProductos(registro, f, base, avisoDe(url.searchParams)),
+        );
       } else if (ruta === 'productos/nuevo') {
         html200('Nuevo producto', 'productos', pantallaNuevo(registro, base));
       } else if (partes.length === 2 && partes[0] === 'productos' && partes[1]) {
@@ -235,7 +239,7 @@ export function crearPanel(d: DependenciasPanel) {
       resultado = { aplicadas: 0, errores: [e.message] };
     }
     res.writeHead(303, {
-      location: `../${destino(formulario.get('volver'), nombre, resultado)}`,
+      location: `../${destino(formulario.get('volver'), nombre, resultado, anclaDe(nombre, formulario))}`,
       'cache-control': 'no-store',
       ...SEGURIDAD,
     });

@@ -26,7 +26,8 @@ import {
   uso,
   valor,
 } from './catalogo.js';
-import { fecha, html, paginas, type Html } from './html.js';
+import { ancla, avisoDe } from './formularios.js';
+import { avisoEnFila, fecha, html, paginas, type Aviso, type Html } from './html.js';
 import { enlaceSku, etiquetaEstado } from './pantallas.js';
 
 const pagina = (q: URLSearchParams): number => {
@@ -123,6 +124,7 @@ export function pantallaHistoricos(
   const n = pagina(q);
   const buscado = (q.get('buscar') ?? '').trim().slice(0, MAX_TEXTO_BUSQUEDA);
   const para = q.get('para');
+  const aviso = avisoDe(q);
   const todos = registro
     .historicos()
     .map((h) => ({ ...h, empates: registro.empatesDeHistorico(h.emiteId).sort(porDecision) }))
@@ -138,11 +140,15 @@ export function pantallaHistoricos(
   const volver = `historicos${conPagina(filtro, n)}`;
   const visibles = trozo(todos, n, porPagina);
   // Los buscadores son formularios GET aparte (un formulario no se anida en el POST del lote): el
-  // campo de cada fila los nombra con `form`.
+  // campo de cada fila los nombra con `form`. El fragmento del `action` vuelve a la fila.
   const idBuscador = (i: number) => `buscar-${i}`;
   const buscadores = visibles.map(
     (h, i) =>
-      html`<form id="${idBuscador(i)}" method="get" action="${base}historicos#historico-${i}">
+      html`<form
+        id="${idBuscador(i)}"
+        method="get"
+        action="${base}historicos#${ancla('h', h.emiteId)}"
+      >
         ${estado ? html`<input type="hidden" name="estado" value="${estado}" />` : ''}
         ${n > 1 ? html`<input type="hidden" name="pagina" value="${n}" />` : ''}
         <input type="hidden" name="para" value="${h.emiteId}" />
@@ -151,7 +157,8 @@ export function pantallaHistoricos(
   const filas = visibles.map((h, i) => {
     const decidible = !h.fusionadoEnId && !h.empates.some((e) => e.estado === 'confirmado');
     const texto = para === h.emiteId ? buscado : '';
-    return html`<tr id="historico-${i}">
+    const id = ancla('h', h.emiteId);
+    return html`<tr id="${id}">
       <td>
         <span class="id">${h.codigo}</span><br />${h.nombre}
         ${h.aliasSku ? html`<br /><span class="tenue">alias de ${h.aliasSku}</span>` : ''}
@@ -162,6 +169,7 @@ export function pantallaHistoricos(
       </td>
       <td>${uso(h.uso)}</td>
       <td>
+        ${avisoEnFila(aviso, id)}
         ${
           h.empates.length
             ? h.empates.map(
@@ -292,6 +300,7 @@ export function pantallaConflictos(
 ): Html {
   const n = pagina(q);
   const todos = registro.conflictosAbiertos();
+  const aviso = avisoDe(q);
   const volver = `conflictos${conPagina(new URLSearchParams(), n)}`;
   return html`<h1>Conflictos abiertos</h1>
     <p class="tenue">
@@ -318,7 +327,7 @@ export function pantallaConflictos(
                     </tr>
                   </thead>
                   <tbody>
-                    ${trozo(todos, n, porPagina).map((c) => tablaConflicto(c, base))}
+                    ${trozo(todos, n, porPagina).map((c) => tablaConflicto(c, base, aviso))}
                   </tbody>
                 </table>
               </div>
@@ -347,6 +356,7 @@ export function pantallaVisibilidad(
 ): Html {
   const n = pagina(q);
   const { items, total } = registro.listar({ propuestoWeb: true }, n, porPagina);
+  const aviso = avisoDe(q);
   const volver = `visibilidad${conPagina(new URLSearchParams(), n)}`;
   return html`<h1>Visibilidad web</h1>
     <p class="tenue">
@@ -377,7 +387,7 @@ export function pantallaVisibilidad(
                   <tbody>
                     ${items.map(
                       (p) =>
-                        html`<tr>
+                        html`<tr id="${ancla('p', p.sku)}">
                           <td>
                             ${
                               p.tipo === 'servicio'
@@ -400,6 +410,7 @@ export function pantallaVisibilidad(
                             ${motivoVisibilidad(p.motivoVisibilidad)}
                           </td>
                           <td>
+                            ${avisoEnFila(aviso, ancla('p', p.sku))}
                             ${
                               p.tipo === 'servicio'
                                 ? html`<span class="tenue">un servicio no se ofrece</span>`
@@ -423,14 +434,19 @@ export function pantallaVisibilidad(
         : html`<p class="tenue">No hay productos propuestos para la web.</p>`
     }
     ${paginas(total, n, porPagina, (p) => conPagina(new URLSearchParams(), p))}
-    ${seccionCategorias(registro, base, volver)}
-    ${seccionRechazadosPorCategoria(registro, base, volver)}`;
+    ${seccionCategorias(registro, base, volver, aviso)}
+    ${seccionRechazadosPorCategoria(registro, base, volver, aviso)}`;
 }
 
 const MAX_RECHAZADOS = 100;
 
 /** Las categorías de Coreinbox cuyos productos no van a la web, y el formulario para sumar más. */
-function seccionCategorias(registro: RegistroCatalogo, base: string, volver: string): Html {
+function seccionCategorias(
+  registro: RegistroCatalogo,
+  base: string,
+  volver: string,
+  aviso: Aviso | null,
+): Html {
   const fuera = registro.categoriasFuera();
   const nombres = new Set(fuera.map((c) => c.categoria));
   const libres = registro.categoriasLeidas().filter((c) => !nombres.has(c));
@@ -453,10 +469,11 @@ function seccionCategorias(registro: RegistroCatalogo, base: string, volver: str
               <tbody>
                 ${fuera.map(
                   (c) =>
-                    html`<tr>
+                    html`<tr id="${ancla('k', c.categoria)}">
                       <td>${c.categoria}</td>
                       <td>${c.usuario ?? nada} ${fecha(c.en)}</td>
                       <td>
+                        ${avisoEnFila(aviso, ancla('k', c.categoria))}
                         ${formulario(
                           base,
                           'categorias',
@@ -501,6 +518,7 @@ function seccionRechazadosPorCategoria(
   registro: RegistroCatalogo,
   base: string,
   volver: string,
+  aviso: Aviso | null,
 ): Html {
   const { items: visibles, total } = registro.listar(
     { rechazadoPorCategoria: true },
@@ -529,7 +547,7 @@ function seccionRechazadosPorCategoria(
                   <tbody>
                     ${visibles.map(
                       (p) =>
-                        html`<tr>
+                        html`<tr id="${ancla('p', p.sku)}">
                           <td>
                             <input
                               type="checkbox"
@@ -542,6 +560,7 @@ function seccionRechazadosPorCategoria(
                           <td>${valor('nombre', p.canonico.nombre?.valor)}</td>
                           <td>${valor('categoria', p.canonico.categoria?.valor)}</td>
                           <td>
+                            ${avisoEnFila(aviso, ancla('p', p.sku))}
                             <div class="botones">${boton('Aprobar', [p.sku, 'aprobado'])}</div>
                           </td>
                         </tr>`,

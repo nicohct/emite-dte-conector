@@ -6,6 +6,7 @@
  * Cada formulario manda una sola decisión con un botón `uno` (JSON) o un lote: las casillas
  * elegidas más el botón que dice qué hacer con ellas.
  */
+import { createHash } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { ErrorPeticion, type NombreAccion } from '../flujos/productos/acciones.js';
 import { SECCIONES, type Aviso } from './html.js';
@@ -127,24 +128,93 @@ function precioDe(texto: string | null): number | string {
   return t !== '' && Number.isFinite(Number(t)) ? Number(t) : (texto ?? '');
 }
 
+const FRAGMENTO = '[A-Za-z0-9_-]+';
+const ES_ANCLA = new RegExp(`^${FRAGMENTO}$`);
+
 const RUTA_VOLVER = new RegExp(
-  `^(?:${Object.keys(SECCIONES).join('|')}|productos/[^/?#.\\\\][^/?#\\\\]*)(?:\\?[^#]*)?$`,
+  `^(?:${Object.keys(SECCIONES).join('|')}|productos/[^/?#.\\\\][^/?#\\\\]*)(?:\\?[^#]*)?(?:#${FRAGMENTO})?$`,
 );
 
 /**
- * La pantalla a la que se vuelve, relativa a `/panel/` (`productos/SKU-1?…`), con el resultado en
- * la consulta. Un `volver` que no sea una pantalla del panel vuelve a los flujos.
+ * El `id` de una fila con acciones, usable como fragmento de URL: `h-<valor>` si el valor sólo trae
+ * letras, dígitos, `_` o `-`; si no, `h_<hash corto>` (el `_` tras el prefijo evita choques).
+ * Prefijos: `h` histórico, `c` conflicto, `p` producto, `k` categoría.
  */
-export function destino(volver: string | null, accion: NombreAccion, aviso: Omit<Aviso, 'accion'>) {
+export function ancla(prefijo: 'h' | 'c' | 'p' | 'k', valor: string | number): string {
+  const v = String(valor);
+  return ES_ANCLA.test(v)
+    ? `${prefijo}-${v}`
+    : `${prefijo}_${createHash('sha256').update(v).digest('hex').slice(0, 12)}`;
+}
+
+/** La primera decisión del formulario, sin lanzar si es ilegible (la acción ya lo reporta). */
+function primera(f: URLSearchParams, clave: string): unknown[] {
+  try {
+    return f.has('uno') ? json(f.get('uno')) : json(f.get(clave));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * La fila a la que vuelve una acción: la de su decisión `uno` o, en un lote, la del primer elemento
+ * marcado. `null` en las acciones que no salen de una fila (alta, edición, «quién manda» global).
+ */
+export function anclaDe(accion: NombreAccion, f: URLSearchParams): string | null {
+  const texto = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? v : null);
+  switch (accion) {
+    case 'empates': {
+      const emiteId = texto(primera(f, 'sel')[0]);
+      return emiteId === null ? null : ancla('h', emiteId);
+    }
+    case 'conflictos': {
+      const id = f.has('uno') ? texto(primera(f, 'sel')[0]) : f.get('sel');
+      return id === null ? null : ancla('c', id);
+    }
+    case 'visibilidad': {
+      const sku = f.has('uno') ? texto(primera(f, 'sku')[0]) : f.get('sku');
+      return sku === null ? null : ancla('p', sku);
+    }
+    case 'reglas': {
+      const sku = f.get('lote') ? f.get('sku') : null;
+      return sku === null ? null : ancla('p', sku);
+    }
+    case 'categorias': {
+      const categoria = f.get('categoria');
+      return categoria === null ? null : ancla('k', categoria);
+    }
+    case 'alta':
+    case 'edicion':
+      return null;
+  }
+}
+
+/**
+ * La pantalla a la que se vuelve, relativa a `/panel/` (`productos/SKU-1?…`), con el resultado en
+ * la consulta. Un `volver` que no sea una pantalla del panel vuelve a los flujos. El fragmento (el
+ * de `volver` o, si no trae, `fila`) va al final y también en la consulta como `fila`, para que la
+ * pantalla dibuje el resultado junto a esa fila.
+ */
+export function destino(
+  volver: string | null,
+  accion: NombreAccion,
+  aviso: Pick<Aviso, 'aplicadas' | 'errores'>,
+  fila: string | null = null,
+) {
   const ruta = volver && RUTA_VOLVER.test(volver) ? volver : 'flujos';
-  const corte = ruta.indexOf('?');
-  const camino = corte < 0 ? ruta : ruta.slice(0, corte);
-  const q = new URLSearchParams(corte < 0 ? '' : ruta.slice(corte + 1));
-  for (const clave of ['accion', 'aplicadas', 'error']) q.delete(clave);
+  const almohadilla = ruta.indexOf('#');
+  const sinFragmento = almohadilla < 0 ? ruta : ruta.slice(0, almohadilla);
+  const fragmento =
+    almohadilla < 0 ? (fila && ES_ANCLA.test(fila) ? fila : null) : ruta.slice(almohadilla + 1);
+  const corte = sinFragmento.indexOf('?');
+  const camino = corte < 0 ? sinFragmento : sinFragmento.slice(0, corte);
+  const q = new URLSearchParams(corte < 0 ? '' : sinFragmento.slice(corte + 1));
+  for (const clave of ['accion', 'aplicadas', 'error', 'fila']) q.delete(clave);
   q.set('accion', accion);
   q.set('aplicadas', String(aviso.aplicadas));
   for (const e of aviso.errores.slice(0, MAX_ERRORES_AVISO)) q.append('error', e);
-  return `${camino}?${q.toString()}`;
+  if (fragmento) q.set('fila', fragmento);
+  return `${camino}?${q.toString()}${fragmento ? `#${fragmento}` : ''}`;
 }
 
 /** El resultado que trae la consulta tras la redirección, si lo hay. */
@@ -152,6 +222,7 @@ export function avisoDe(q: URLSearchParams): Aviso | null {
   const accion = q.get('accion');
   const aplicadas = Number(q.get('aplicadas') ?? NaN);
   if (!accion || !Number.isInteger(aplicadas) || aplicadas < 0) return null;
+  const fila = q.get('fila');
   return {
     accion: accion.slice(0, 40),
     aplicadas,
@@ -159,5 +230,6 @@ export function avisoDe(q: URLSearchParams): Aviso | null {
       .getAll('error')
       .slice(0, MAX_ERRORES_AVISO)
       .map((e) => e.slice(0, 300)),
+    ...(fila && ES_ANCLA.test(fila) ? { fila } : {}),
   };
 }

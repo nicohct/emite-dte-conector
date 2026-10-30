@@ -58,7 +58,7 @@ describe('Estado: eventos', () => {
     });
     catalogo.proponerEmpate(
       'e1',
-      { sku: 'SKU-001', puntaje: 1, motivo: 'codigo', detalle: 'el código es el SKU' },
+      [{ sku: 'SKU-001', puntaje: 1, motivo: 'codigo', detalle: 'el código es el SKU' }],
       en(6),
     );
     catalogo.registrarAccion('visibilidad', 'admin@example.com', { skus: ['SKU-001'] }, en(7));

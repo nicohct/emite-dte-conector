@@ -4,7 +4,12 @@
  * `POST acciones/{…}`, que cambia el registro del conector; la pasada de escritura lleva las
  * decisiones a los sistemas.
  */
-import type { EstadoEmpate, ProductoCatalogo, RegistroCatalogo } from '../estado-catalogo.js';
+import type {
+  Empate,
+  EstadoEmpate,
+  ProductoCatalogo,
+  RegistroCatalogo,
+} from '../estado-catalogo.js';
 import { CAMPOS_CATALOGO } from '../estado-catalogo.js';
 import { CAMPOS_ULTIMO_CAMBIO } from '../flujos/productos/canonico.js';
 import {
@@ -45,6 +50,67 @@ const conPagina = (q: URLSearchParams, n: number): string => {
 const ESTADOS_HISTORICO = ['propuesto', 'confirmado', 'rechazado', 'sin_candidato'] as const;
 type FiltroHistorico = (typeof ESTADOS_HISTORICO)[number];
 
+const ORDEN_EMPATE: Record<EstadoEmpate, number> = { confirmado: 0, propuesto: 1, rechazado: 2 };
+
+/** Confirmados, después las propuestas de mejor a peor y al final los rechazados. */
+const porDecision = (a: Empate, b: Empate): number =>
+  ORDEN_EMPATE[a.estado] - ORDEN_EMPATE[b.estado] ||
+  b.puntaje - a.puntaje ||
+  a.sku.localeCompare(b.sku);
+
+const MAX_RESULTADOS_BUSQUEDA = 10;
+const MAX_TEXTO_BUSQUEDA = 100;
+
+/** El nombre canónico del SKU y en qué sistemas está, para comparar sin abrir el detalle. */
+function resumenSku(p: ProductoCatalogo | null): Html {
+  if (!p) return html`<span class="tenue">el SKU ya no está en el registro</span>`;
+  const nombre = p.canonico.nombre?.valor;
+  const sistemas = p.presentes.map((s) => NOMBRE_SISTEMA[s]).join(', ');
+  return html`${typeof nombre === 'string' && nombre !== '' ? nombre : nada}
+    <span class="tenue">· ${sistemas || 'en ningún sistema'}</span>`;
+}
+
+/**
+ * Hasta diez canónicos para `texto` (código o nombre), con el SKU exacto primero si lo hay. Usa la
+ * misma búsqueda de la lista de productos.
+ */
+function buscarCanonicos(
+  registro: RegistroCatalogo,
+  texto: string,
+): Array<{ producto: ProductoCatalogo; exacto: boolean }> {
+  const exacto = registro.producto(texto);
+  const otros = registro
+    .listar({ q: texto }, 1, MAX_RESULTADOS_BUSQUEDA)
+    .items.filter((p) => p.sku !== exacto?.sku);
+  return [
+    ...(exacto ? [{ producto: exacto, exacto: true }] : []),
+    ...otros.map((producto) => ({ producto, exacto: false })),
+  ].slice(0, MAX_RESULTADOS_BUSQUEDA);
+}
+
+function resultadosBusqueda(
+  registro: RegistroCatalogo,
+  emiteId: string,
+  texto: string,
+  base: string,
+): Html {
+  const resultados = buscarCanonicos(registro, texto);
+  if (resultados.length === 0) {
+    return html`<p class="tenue resultados">Ningún canónico coincide con «${texto}».</p>`;
+  }
+  return html`<ul class="resultados" aria-label="Canónicos para «${texto}»">
+    ${resultados.map(
+      ({ producto: p, exacto }) =>
+        html`<li>
+          ${enlaceSku(p.sku, base)}
+          ${exacto ? html`<span class="etiqueta bien">SKU exacto</span>` : ''} ${resumenSku(p)} ·
+          ${valor('precio', p.canonico.precio?.valor)}
+          ${boton('Empatar con este', [emiteId, p.sku, 'confirmado'])}
+        </li>`,
+    )}
+  </ul>`;
+}
+
 export function pantallaHistoricos(
   registro: RegistroCatalogo,
   q: URLSearchParams,
@@ -55,9 +121,11 @@ export function pantallaHistoricos(
     ? (q.get('estado') as FiltroHistorico)
     : null;
   const n = pagina(q);
+  const buscado = (q.get('buscar') ?? '').trim().slice(0, MAX_TEXTO_BUSQUEDA);
+  const para = q.get('para');
   const todos = registro
     .historicos()
-    .map((h) => ({ ...h, empates: registro.empatesDeHistorico(h.emiteId) }))
+    .map((h) => ({ ...h, empates: registro.empatesDeHistorico(h.emiteId).sort(porDecision) }))
     .filter((h) =>
       estado === 'sin_candidato'
         ? !h.fusionadoEnId && h.empates.length === 0
@@ -68,62 +136,98 @@ export function pantallaHistoricos(
   const filtro = new URLSearchParams();
   if (estado) filtro.set('estado', estado);
   const volver = `historicos${conPagina(filtro, n)}`;
-  const filas = trozo(todos, n, porPagina).map(
-    (h) =>
-      html`<tr>
-        <td>
-          <span class="id">${h.codigo}</span><br />${h.nombre}
-          ${h.aliasSku ? html`<br /><span class="tenue">alias de ${h.aliasSku}</span>` : ''}
-        </td>
-        <td>
-          ${h.activo ? 'activo' : html`<span class="tenue">inactivo</span>`}
-          ${h.fusionadoEnId ? html`<br /><span class="tenue">fusionado en ${h.fusionadoEnId}</span>` : ''}
-        </td>
-        <td>${uso(h.uso)}</td>
-        <td>
-          ${
-            h.empates.length
-              ? h.empates.map(
-                  (e) =>
-                    html`<div style="margin-bottom:6px">
-                      ${
-                        e.estado === 'propuesto' && !h.fusionadoEnId
-                          ? html`<input
-                              type="checkbox"
-                              name="sel"
-                              value="${JSON.stringify([e.emiteId, e.sku])}"
-                              aria-label="Elegir ${h.codigo} con ${e.sku}"
-                            />`
-                          : ''
-                      }
-                      ${enlaceSku(e.sku, base)} ${etiquetaEstado(e.estado)}
-                      <span class="cifra">${e.puntaje.toFixed(2)}</span><br />
-                      <span class="tenue">${e.motivo}: ${e.detalle}</span>
-                      ${
-                        e.estado === 'propuesto' && !h.fusionadoEnId
-                          ? html`<div class="botones">
-                              ${boton('Confirmar', [e.emiteId, e.sku, 'confirmado'])}
-                              ${boton('Rechazar', [e.emiteId, e.sku, 'rechazado'])}
-                            </div>`
-                          : e.decididoPor
-                            ? html`<br /><span class="tenue"
-                                  >${e.decididoPor} ${fecha(e.decididoEn)}</span
-                                >`
-                            : ''
-                      }
-                    </div>`,
-                )
-              : html`<span class="tenue">sin candidato</span>`
-          }
-        </td>
-      </tr>`,
+  const visibles = trozo(todos, n, porPagina);
+  // Los buscadores son formularios GET aparte (un formulario no se anida en el POST del lote): el
+  // campo de cada fila los nombra con `form`.
+  const idBuscador = (i: number) => `buscar-${i}`;
+  const buscadores = visibles.map(
+    (h, i) =>
+      html`<form id="${idBuscador(i)}" method="get" action="${base}historicos#historico-${i}">
+        ${estado ? html`<input type="hidden" name="estado" value="${estado}" />` : ''}
+        ${n > 1 ? html`<input type="hidden" name="pagina" value="${n}" />` : ''}
+        <input type="hidden" name="para" value="${h.emiteId}" />
+      </form>`,
   );
+  const filas = visibles.map((h, i) => {
+    const decidible = !h.fusionadoEnId && !h.empates.some((e) => e.estado === 'confirmado');
+    const texto = para === h.emiteId ? buscado : '';
+    return html`<tr id="historico-${i}">
+      <td>
+        <span class="id">${h.codigo}</span><br />${h.nombre}
+        ${h.aliasSku ? html`<br /><span class="tenue">alias de ${h.aliasSku}</span>` : ''}
+      </td>
+      <td>
+        ${h.activo ? 'activo' : html`<span class="tenue">inactivo</span>`}
+        ${h.fusionadoEnId ? html`<br /><span class="tenue">fusionado en ${h.fusionadoEnId}</span>` : ''}
+      </td>
+      <td>${uso(h.uso)}</td>
+      <td>
+        ${
+          h.empates.length
+            ? h.empates.map(
+                (e) =>
+                  html`<div style="margin-bottom:6px">
+                    ${
+                      e.estado === 'propuesto' && !h.fusionadoEnId
+                        ? html`<input
+                            type="checkbox"
+                            name="sel"
+                            value="${JSON.stringify([e.emiteId, e.sku])}"
+                            aria-label="Elegir ${h.codigo} con ${e.sku}"
+                          />`
+                        : ''
+                    }
+                    ${enlaceSku(e.sku, base)} ${etiquetaEstado(e.estado)}
+                    <span class="cifra">${e.puntaje.toFixed(2)}</span><br />
+                    ${resumenSku(registro.producto(e.sku))}<br />
+                    <span class="tenue">${e.motivo}: ${e.detalle}</span>
+                    ${
+                      e.estado === 'propuesto' && !h.fusionadoEnId
+                        ? html`<div class="botones">
+                            ${boton('Confirmar', [e.emiteId, e.sku, 'confirmado'])}
+                            ${boton('Rechazar', [e.emiteId, e.sku, 'rechazado'])}
+                          </div>`
+                        : e.decididoPor
+                          ? html`<br /><span class="tenue"
+                                >${e.decididoPor} ${fecha(e.decididoEn)}</span
+                              >`
+                          : ''
+                    }
+                  </div>`,
+              )
+            : html`<span class="tenue">sin candidato</span>`
+        }
+        ${
+          decidible
+            ? html`<div class="botones">
+                  <label
+                    >Buscar canónico
+                    <input
+                      type="search"
+                      name="buscar"
+                      form="${idBuscador(i)}"
+                      value="${texto}"
+                      maxlength="${MAX_TEXTO_BUSQUEDA}"
+                      placeholder="código o nombre"
+                  /></label>
+                  <button type="submit" form="${idBuscador(i)}">Buscar</button>
+                </div>
+                ${texto ? resultadosBusqueda(registro, h.emiteId, texto, base) : ''}`
+            : ''
+        }
+      </td>
+    </tr>`;
+  });
   return html`<h1>Históricos de Emite DTE</h1>
     <nav class="pestanas" aria-label="Vistas del catálogo">
       <a href="${base}productos">Por SKU</a>
       <a href="${base}historicos" aria-current="page">Históricos de Emite DTE</a>
       <a href="${base}productos?vista=sin_sku">Sin SKU</a>
     </nav>
+    <p class="aviso aviso-accion" role="note">
+      Confirmar un empate es definitivo cuando la escritura está encendida: fusiona el histórico en
+      el canónico y no se deshace.
+    </p>
     <form class="filtros" method="get">
       <label
         >Empate
@@ -141,7 +245,7 @@ export function pantallaHistoricos(
     </form>
     ${
       filas.length
-        ? formulario(
+        ? html`${formulario(
             base,
             'empates',
             volver,
@@ -165,13 +269,16 @@ export function pantallaHistoricos(
                 <button type="submit" name="estado" value="confirmado">Confirmar</button>
                 <button type="submit" name="estado" value="rechazado">Rechazar</button>
               </div>`,
-          )
+          )}
+          ${buscadores}`
         : html`<p class="tenue">No hay históricos${estado ? ' con este filtro' : ''}.</p>`
     }
     ${paginas(todos.length, n, porPagina, (p) => conPagina(filtro, p))}
     <p class="tenue">
-      Confirmar un empate lo anota en el registro; la fusión en Emite DTE la hace la siguiente
-      pasada de escritura, si está encendida.
+      Cada histórico trae hasta tres candidatos, el mejor primero; rechazar uno trae el siguiente.
+      Si ninguno es el producto, «Buscar canónico» encuentra el correcto por código o nombre y
+      «Empatar con este» lo confirma a mano. Confirmar un empate lo anota en el registro; la fusión
+      en Emite DTE la hace la siguiente pasada de escritura, si está encendida.
     </p>`;
 }
 

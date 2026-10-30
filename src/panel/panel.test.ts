@@ -388,7 +388,7 @@ describe('panel: eventos', () => {
       });
       estado.catalogo.proponerEmpate(
         'eh-1',
-        { sku: 'SKU-002', puntaje: 0.9, motivo: 'mismo nombre', detalle: '{}' },
+        [{ sku: 'SKU-002', puntaje: 0.9, motivo: 'mismo nombre', detalle: '{}' }],
         '2026-10-29T10:00:00.000Z',
       );
       estado.catalogo.registrarAccion(

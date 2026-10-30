@@ -834,25 +834,23 @@ export class RegistroCatalogo {
   // --- Empates ---
 
   /**
-   * Reemplaza la propuesta vigente de un histórico (o la quita con `null`). Las filas confirmadas o
-   * rechazadas no se tocan.
+   * Reemplaza las propuestas vigentes de un histórico por `candidatos` (o las quita con una lista
+   * vacía). Las filas confirmadas o rechazadas no se tocan.
    */
   proponerEmpate(
     emiteId: string,
-    candidato: { sku: string; puntaje: number; motivo: string; detalle: string } | null,
+    candidatos: ReadonlyArray<{ sku: string; puntaje: number; motivo: string; detalle: string }>,
     en: string,
   ): void {
     this.db
       .prepare(`DELETE FROM catalogo_empates WHERE emite_id = ? AND estado = 'propuesto'`)
       .run(emiteId);
-    if (!candidato) return;
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO catalogo_empates
-           (emite_id, sku, puntaje, motivo, detalle, estado, propuesto_en)
-         VALUES (?, ?, ?, ?, ?, 'propuesto', ?)`,
-      )
-      .run(emiteId, candidato.sku, candidato.puntaje, candidato.motivo, candidato.detalle, en);
+    const insertar = this.db.prepare(
+      `INSERT OR IGNORE INTO catalogo_empates
+         (emite_id, sku, puntaje, motivo, detalle, estado, propuesto_en)
+       VALUES (?, ?, ?, ?, ?, 'propuesto', ?)`,
+    );
+    for (const c of candidatos) insertar.run(emiteId, c.sku, c.puntaje, c.motivo, c.detalle, en);
   }
 
   empatesDeHistorico(emiteId: string): Empate[] {
@@ -1392,7 +1390,7 @@ export class RegistroCatalogo {
         `SELECT COUNT(DISTINCT sku) AS n FROM catalogo_conflictos WHERE estado = 'abierto'`,
       ),
       empatesPropuestos: uno(
-        `SELECT COUNT(*) AS n FROM catalogo_empates WHERE estado = 'propuesto'`,
+        `SELECT COUNT(DISTINCT emite_id) AS n FROM catalogo_empates WHERE estado = 'propuesto'`,
       ),
       sinSku: uno('SELECT COUNT(*) AS n FROM catalogo_sin_sku'),
     };

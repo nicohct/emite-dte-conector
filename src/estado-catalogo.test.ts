@@ -121,3 +121,16 @@ describe('conflictosAbiertos()', () => {
     estado.cerrar();
   });
 });
+
+describe('crearEnCoreinboxDesdeWeb()', () => {
+  it('viene apagada y fijarla dice si cambió', () => {
+    const { catalogo } = new Estado(':memory:');
+    expect(catalogo.crearEnCoreinboxDesdeWeb()).toBe(false);
+    expect(catalogo.fijarCrearEnCoreinboxDesdeWeb(false)).toBe(false);
+    expect(catalogo.fijarCrearEnCoreinboxDesdeWeb(true)).toBe(true);
+    expect(catalogo.crearEnCoreinboxDesdeWeb()).toBe(true);
+    expect(catalogo.fijarCrearEnCoreinboxDesdeWeb(true)).toBe(false);
+    expect(catalogo.fijarCrearEnCoreinboxDesdeWeb(false)).toBe(true);
+    expect(catalogo.crearEnCoreinboxDesdeWeb()).toBe(false);
+  });
+});

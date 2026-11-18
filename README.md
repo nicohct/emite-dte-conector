@@ -248,10 +248,19 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 - **Crear.** Lo que falte en Emite DTE y tenga fuente (Coreinbox o la web) se crea con el SKU como
   código. No se crea si un histórico de Emite DTE ya usa ese código sin empate confirmado (queda un
   aviso). En la web se crea sólo lo aprobado que falte: publicado si está activo, si no en borrador.
-  **En Coreinbox sólo se crea lo que nació en el panel** (un alta): con su tipo, neto, exención y la
+  **En Coreinbox se crea lo que nació en el panel** (un alta): con su tipo, neto, exención y la
   categoría resuelta a su id (si Coreinbox no tiene una categoría con ese nombre, se crea sin
-  categoría y el evento `creado` lo avisa). Lo que existe sólo en la web sigue sin crearse en
-  Coreinbox. Lo creado queda como lectura de ese sistema, con el eco marcado.
+  categoría y el evento `creado` lo avisa). Con `COREINBOX_CREAR_DESDE_WEB=true` (y `coreinbox` en
+  `PRODUCTOS_ESCRIBIR_SISTEMAS`) también **lo que nace en la web**: un SKU que falta en Coreinbox se
+  crea allá si está publicado en la web y su visibilidad es `aprobado` (un borrador o un
+  `propuesto` no), es un bien, tiene nombre y precio, y Coreinbox no tiene un producto sin SKU con
+  el mismo nombre (sin tildes, espacios ni mayúsculas; si lo tiene, queda el aviso «Coreinbox tiene
+  un producto sin SKU con el mismo nombre: ponerle el SKU allá»). Se crea activo, como bien, con el
+  nombre y el neto canónicos, afecto salvo que el canónico diga exento, y **sin categoría**: las de
+  la web no son las de Coreinbox, que manda en categoría (la de la web tampoco se le escribe
+  después). El evento `creado` dice «creado en Coreinbox desde la web; sin categoría». Desde ahí
+  rigen las reglas de siempre. Lo que existe sólo en Emite DTE no se crea en Coreinbox. Lo creado
+  queda como lectura de ese sistema, con el eco marcado.
 - **Lo pendiente del panel.** Un alta manda en todos sus campos hasta que el SKU existe en todo su
   alcance; ahí se borra y el producto se calcula como cualquier otro. Una edición en «último cambio»
   se escribe en todos los sistemas; con propietario, sólo en el propietario, y la pasada siguiente
@@ -299,6 +308,10 @@ resultado de cada pasada (`escritos`, `revertidos`, `creados`, `adoptados`, `fus
 2. Respaldar las decisiones: `GET /catalogo/decisiones` (ver abajo).
 3. Encender por partes: `PRODUCTOS_ESCRIBIR=true` con `PRODUCTOS_ESCRIBIR_SISTEMAS=emite`, mirar los
    eventos de escritura, y después sumar `coreinbox` y `woocommerce`.
+4. Con `coreinbox` ya en `PRODUCTOS_ESCRIBIR_SISTEMAS`, encender `COREINBOX_CREAR_DESDE_WEB=true` y
+   reiniciar: el registro se recalcula al arrancar y la pasada siguiente crea en Coreinbox lo
+   publicado en la web que falte allá. Antes conviene mirar en el panel los SKU con «falta en
+   Coreinbox» y ponerles el SKU en Coreinbox a los que ya existan allá sin él.
 
 #### Respaldo de las decisiones
 
@@ -396,30 +409,31 @@ en la siguiente subida.
 
 ## Variables de entorno
 
-| Variable                      | Obligatoria         | Por omisión                                   | Para qué                                                                                                                                                                  |
-| ----------------------------- | ------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COREINBOX_URL`               | Sí                  | —                                             | URL base de la API de Coreinbox.                                                                                                                                          |
-| `COREINBOX_API_KEY`           | Sí                  | —                                             | Clave `cik_…` de Coreinbox, con los alcances de [Requisitos](#requisitos).                                                                                                |
-| `COREINBOX_TIPO_ACTIVIDAD`    | No                  | `d0000000-0000-0000-0000-000000000004` (nota) | Tipo de actividad del CRM con que se anotan los eventos.                                                                                                                  |
-| `EMITE_URL`                   | Sí                  | —                                             | URL de la API de Emite DTE por la red interna (en el compose, `http://app:3000`).                                                                                         |
-| `EMITE_API_KEY`               | Sí                  | —                                             | API key del emisor, `edte_…`, con `cotizaciones:escribir` y `dte:leer` (y catálogo: `catalogo:leer` con `FLUJO_PRODUCTOS`, `catalogo:escribir` con `PRODUCTOS_ESCRIBIR`). |
-| `EMITE_EMISOR_ID`             | Sí                  | —                                             | Emisor al que se cargan las cotizaciones y los productos.                                                                                                                 |
-| `EMITE_URL_PUBLICA`           | No                  | El valor de `EMITE_URL`                       | URL con la que la gente abre Emite DTE; va en los enlaces de las actividades del CRM.                                                                                     |
-| `EMITE_WEBHOOK_SECRET`        | Sí                  | —                                             | Secreto `whsec_…` del webhook registrado en Emite DTE.                                                                                                                    |
-| `DESDE`                       | No                  | Fecha y hora de arranque                      | Primer `updatedSince` de cotizaciones cuando no hay cursor guardado (ISO 8601). El catálogo no lo usa.                                                                    |
-| `FLUJO_COTIZACIONES`          | No                  | `true`                                        | Enciende el flujo A, cotizaciones aceptadas.                                                                                                                              |
-| `FLUJO_PRODUCTOS`             | No                  | `false`                                       | Enciende el flujo C, catálogo de productos: lectura de los tres sistemas y registro canónico.                                                                             |
-| `SINCRONIZAR_PRODUCTOS`       | No (obsoleta)       | —                                             | Alias de `FLUJO_PRODUCTOS`, con aviso en el log. Si están las dos, manda `FLUJO_PRODUCTOS`.                                                                               |
-| `PRODUCTOS_ESCRIBIR`          | No                  | `false`                                       | Con `FLUJO_PRODUCTOS`, además de leer, escribe el canónico (ver [Escritura](#escritura-productos_escribirtrue)).                                                          |
-| `PRODUCTOS_ESCRIBIR_SISTEMAS` | No                  | `coreinbox,woocommerce,emite`                 | Dónde escribe la escritura, separados por comas; en los demás sólo lee.                                                                                                   |
-| `CATALOGO_API_KEY`            | No                  | —                                             | Clave de `GET /catalogo` y sus acciones (`Authorization: Bearer`). Sin ella esas rutas no existen.                                                                        |
-| `FLUJO_PEDIDOS`               | No                  | `false`                                       | Flujo B, pedidos web. Sin implementar: encendido sólo deja un aviso en el log.                                                                                            |
-| `WOO_URL`                     | No, las tres juntas | —                                             | URL de la tienda WooCommerce. Debe ser `https://`.                                                                                                                        |
-| `WOO_CONSUMER_KEY`            | No, las tres juntas | —                                             | Clave de consumidor de la API REST, `ck_…`.                                                                                                                               |
-| `WOO_CONSUMER_SECRET`         | No, las tres juntas | —                                             | Secreto de consumidor de la API REST, `cs_…`.                                                                                                                             |
-| `INTERVALO_S`                 | No                  | `60`                                          | Segundos entre pasadas. Mínimo 10.                                                                                                                                        |
-| `PUERTO`                      | No                  | `8080`                                        | Puerto del receptor de webhooks y de `GET /salud`.                                                                                                                        |
-| `ESTADO_RUTA`                 | No                  | `./datos/estado.sqlite`                       | Dónde se guarda el estado (SQLite).                                                                                                                                       |
+| Variable                      | Obligatoria         | Por omisión                                   | Para qué                                                                                                                                                                                                   |
+| ----------------------------- | ------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COREINBOX_URL`               | Sí                  | —                                             | URL base de la API de Coreinbox.                                                                                                                                                                           |
+| `COREINBOX_API_KEY`           | Sí                  | —                                             | Clave `cik_…` de Coreinbox, con los alcances de [Requisitos](#requisitos).                                                                                                                                 |
+| `COREINBOX_TIPO_ACTIVIDAD`    | No                  | `d0000000-0000-0000-0000-000000000004` (nota) | Tipo de actividad del CRM con que se anotan los eventos.                                                                                                                                                   |
+| `EMITE_URL`                   | Sí                  | —                                             | URL de la API de Emite DTE por la red interna (en el compose, `http://app:3000`).                                                                                                                          |
+| `EMITE_API_KEY`               | Sí                  | —                                             | API key del emisor, `edte_…`, con `cotizaciones:escribir` y `dte:leer` (y catálogo: `catalogo:leer` con `FLUJO_PRODUCTOS`, `catalogo:escribir` con `PRODUCTOS_ESCRIBIR`).                                  |
+| `EMITE_EMISOR_ID`             | Sí                  | —                                             | Emisor al que se cargan las cotizaciones y los productos.                                                                                                                                                  |
+| `EMITE_URL_PUBLICA`           | No                  | El valor de `EMITE_URL`                       | URL con la que la gente abre Emite DTE; va en los enlaces de las actividades del CRM.                                                                                                                      |
+| `EMITE_WEBHOOK_SECRET`        | Sí                  | —                                             | Secreto `whsec_…` del webhook registrado en Emite DTE.                                                                                                                                                     |
+| `DESDE`                       | No                  | Fecha y hora de arranque                      | Primer `updatedSince` de cotizaciones cuando no hay cursor guardado (ISO 8601). El catálogo no lo usa.                                                                                                     |
+| `FLUJO_COTIZACIONES`          | No                  | `true`                                        | Enciende el flujo A, cotizaciones aceptadas.                                                                                                                                                               |
+| `FLUJO_PRODUCTOS`             | No                  | `false`                                       | Enciende el flujo C, catálogo de productos: lectura de los tres sistemas y registro canónico.                                                                                                              |
+| `SINCRONIZAR_PRODUCTOS`       | No (obsoleta)       | —                                             | Alias de `FLUJO_PRODUCTOS`, con aviso en el log. Si están las dos, manda `FLUJO_PRODUCTOS`.                                                                                                                |
+| `PRODUCTOS_ESCRIBIR`          | No                  | `false`                                       | Con `FLUJO_PRODUCTOS`, además de leer, escribe el canónico (ver [Escritura](#escritura-productos_escribirtrue)).                                                                                           |
+| `PRODUCTOS_ESCRIBIR_SISTEMAS` | No                  | `coreinbox,woocommerce,emite`                 | Dónde escribe la escritura, separados por comas; en los demás sólo lee.                                                                                                                                    |
+| `COREINBOX_CREAR_DESDE_WEB`   | No                  | `false`                                       | Crea en Coreinbox los bienes publicados en la web con SKU que faltan allá, sin categoría. Rige sólo con `coreinbox` en `PRODUCTOS_ESCRIBIR_SISTEMAS` (ver [Escritura](#escritura-productos_escribirtrue)). |
+| `CATALOGO_API_KEY`            | No                  | —                                             | Clave de `GET /catalogo` y sus acciones (`Authorization: Bearer`). Sin ella esas rutas no existen.                                                                                                         |
+| `FLUJO_PEDIDOS`               | No                  | `false`                                       | Flujo B, pedidos web. Sin implementar: encendido sólo deja un aviso en el log.                                                                                                                             |
+| `WOO_URL`                     | No, las tres juntas | —                                             | URL de la tienda WooCommerce. Debe ser `https://`.                                                                                                                                                         |
+| `WOO_CONSUMER_KEY`            | No, las tres juntas | —                                             | Clave de consumidor de la API REST, `ck_…`.                                                                                                                                                                |
+| `WOO_CONSUMER_SECRET`         | No, las tres juntas | —                                             | Secreto de consumidor de la API REST, `cs_…`.                                                                                                                                                              |
+| `INTERVALO_S`                 | No                  | `60`                                          | Segundos entre pasadas. Mínimo 10.                                                                                                                                                                         |
+| `PUERTO`                      | No                  | `8080`                                        | Puerto del receptor de webhooks y de `GET /salud`.                                                                                                                                                         |
+| `ESTADO_RUTA`                 | No                  | `./datos/estado.sqlite`                       | Dónde se guarda el estado (SQLite).                                                                                                                                                                        |
 
 Los booleanos aceptan `true`, `1`, `si` o `sí`, y `false`, `0` o `no`. Otro valor falla al arrancar.
 `SINCRONIZAR_PRODUCTOS` se lee como antes: sólo `true`, `1`, `si` o `sí` la encienden.
@@ -583,8 +597,9 @@ La última pasada y la última falla viven en memoria y se pierden al reiniciar.
   la consulta periódica por recepción, sin tocar lo demás.
 - Factura sólo en pesos. Una cotización en otra moneda queda con error y aviso en el negocio.
 - Un workspace de Coreinbox ↔ un emisor de Emite DTE. Para más, una instancia por par.
-- El catálogo sólo crea en Coreinbox lo que nace en el panel. No sube archivos (PR 7b), no borra en
-  ningún sistema ni cambia códigos.
+- El catálogo crea en Coreinbox lo que nace en el panel y, con `COREINBOX_CREAR_DESDE_WEB`, lo
+  publicado en la web, pero nunca lo que existe sólo en Emite DTE ni la categoría de la web. No sube
+  archivos (PR 7b), no borra en ningún sistema ni cambia códigos.
 - Un histórico adoptado sigue con `origen=historial` en Emite DTE: la API todavía no deja cambiarlo.
 - No lee las variaciones de los productos variables: sólo el SKU del padre.
 - No detecta los productos borrados en Coreinbox ni en la web: se quedan con su última lectura.

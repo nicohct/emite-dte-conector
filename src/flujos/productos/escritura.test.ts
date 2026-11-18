@@ -8,10 +8,12 @@ import {
   CI,
   EMITE,
   armar,
+  coreinbox,
   emite,
   mundoInicial,
   respuesta,
   tic,
+  woo,
   type Mundo,
 } from '../../prueba/catalogo.js';
 import { aplicarAccion } from './acciones.js';
@@ -602,6 +604,137 @@ describe('escritura por sistema y fallas', () => {
     await m.pasada();
     expect(rechazos).toEqual(['SKU-005']);
     expect(m.estado.eventos({ estado: 'error' })).toHaveLength(1);
+  });
+});
+
+describe('crear en Coreinbox lo que nace en la web (COREINBOX_CREAR_DESDE_WEB)', () => {
+  /** El mundo de siempre más un bien publicado sólo en la web, con una categoría que Coreinbox tiene. */
+  function conTaza(): Mundo {
+    const m = mundoInicial();
+    m.woo.push(
+      woo(20, {
+        sku: 'SKU-200',
+        name: 'Taza térmica',
+        regular_price: '5990',
+        categories: [{ id: 3, name: 'Válvulas', slug: 'valvulas' }],
+      }),
+    );
+    return m;
+  }
+
+  async function encendida(
+    mundo: Mundo = conTaza(),
+    opciones: { sistemas?: SistemaCatalogo[]; extra?: Parameters<typeof armar>[2] } = {},
+  ) {
+    const m = armar(mundo, new Estado(':memory:'), opciones.extra);
+    m.estado.catalogo.fijarCrearEnCoreinboxDesdeWeb(true);
+    m.d.escribir = true;
+    if (opciones.sistemas) m.d.sistemas = opciones.sistemas;
+    const primera = await m.pasada();
+    return { ...m, primera };
+  }
+
+  const creadosEnCoreinbox = (escrituras: Array<{ sistema: string; metodo: string }>) =>
+    escrituras.filter((e) => e.sistema === 'coreinbox' && e.metodo === 'POST');
+
+  it('un bien publicado en la web con SKU y sin par se crea en Coreinbox, activo y sin categoría', async () => {
+    const m = await encendida();
+    // 5.990 bruto = 5.033,61 neto; sin categoría aunque Coreinbox tenga una con ese nombre.
+    expect(creadosEnCoreinbox(m.escrituras)).toEqual([
+      {
+        sistema: 'coreinbox',
+        metodo: 'POST',
+        ruta: '/api/v1/products',
+        cuerpo: {
+          name: 'Taza térmica',
+          sku: 'SKU-200',
+          type: 'product',
+          unitPrice: 5033.61,
+          currencyCode: 'CLP',
+          isTaxable: true,
+        },
+      },
+    ]);
+    expect(m.mundo.coreinbox.find((c) => c.sku === 'SKU-200')).toMatchObject({
+      isActive: true,
+      categoryId: null,
+    });
+    const [creado] = m.estado.catalogo
+      .eventosDeSku('SKU-200')
+      .filter((e) => e.sistema === 'coreinbox' && e.estado === 'creado');
+    expect(creado).toMatchObject({
+      idExterno: 'ci-SKU-200',
+      mensaje: 'creado en Coreinbox desde la web; sin categoría',
+    });
+    // Lo devuelto queda como lectura de Coreinbox con el eco marcado.
+    const lectura = m.estado.catalogo.lecturas('SKU-200').coreinbox;
+    expect(lectura?.campos.precio).toMatchObject({ valor: 5990, escritoValor: 5990 });
+    expect(lectura?.campos.categoria).toMatchObject({ valor: null, escritoValor: null });
+    // También se crea en Emite DTE, como cualquier producto con fuente.
+    expect(m.mundo.emite.some((e) => e.codigo === 'SKU-200')).toBe(true);
+    // Un borrador en la tienda (SKU-006) no se crea en Coreinbox.
+    expect(m.mundo.coreinbox.some((c) => c.sku === 'SKU-006')).toBe(false);
+    expect(m.estado.catalogo.producto('SKU-006')?.crearEn).not.toContain('coreinbox');
+  });
+
+  it('la pasada siguiente lo reconoce como eco: no escribe, no revierte ni abre conflicto', async () => {
+    const m = await encendida();
+    const marca = m.escrituras.length;
+    const r = await m.pasada();
+    expect(desde(m.escrituras, marca)).toEqual([]);
+    expect(r).toMatchObject({ creados: 0, escritos: 0, revertidos: 0, conError: 0 });
+    const p = m.estado.catalogo.producto('SKU-200');
+    expect(p).toMatchObject({ faltaEn: [], crearEn: [], escrituras: [], avisos: [] });
+    expect(p?.canonico.categoria).toMatchObject({ valor: 'Válvulas', fuente: 'woocommerce' });
+    expect(m.estado.catalogo.conflictos('SKU-200', true)).toEqual([]);
+    // Y desde ahí rigen las reglas de siempre: un cambio de nombre en la web llega a Coreinbox.
+    aMano.web(m.mundo, 20, { name: 'Taza térmica 500 ml' });
+    await m.pasada();
+    expect(m.mundo.coreinbox.find((c) => c.sku === 'SKU-200')?.name).toBe('Taza térmica 500 ml');
+  });
+
+  it('con la variable apagada no se crea nada en Coreinbox', async () => {
+    const m = armar(conTaza());
+    m.d.escribir = true;
+    await m.pasada();
+    expect(creadosEnCoreinbox(m.escrituras)).toEqual([]);
+    expect(m.estado.catalogo.producto('SKU-200')?.faltaEn).toContain('coreinbox');
+  });
+
+  it('sin coreinbox en PRODUCTOS_ESCRIBIR_SISTEMAS no se crea allá', async () => {
+    const m = await encendida(conTaza(), { sistemas: ['emite', 'woocommerce'] });
+    expect(creadosEnCoreinbox(m.escrituras)).toEqual([]);
+    expect(m.mundo.emite.some((e) => e.codigo === 'SKU-200')).toBe(true);
+  });
+
+  it('un homónimo sin SKU en Coreinbox lo frena con un aviso', async () => {
+    const mundo = conTaza();
+    mundo.coreinbox.push(coreinbox('c9', { sku: null, name: 'TAZA  TERMICA' }));
+    const m = await encendida(mundo);
+    expect(creadosEnCoreinbox(m.escrituras)).toEqual([]);
+    expect(m.estado.catalogo.producto('SKU-200')?.avisos).toContain(
+      'Coreinbox tiene un producto sin SKU con el mismo nombre: ponerle el SKU allá',
+    );
+  });
+
+  it('si Coreinbox rechaza la creación queda el error y no se vuelve a mandar igual', async () => {
+    let intentos = 0;
+    const m = await encendida(conTaza(), {
+      extra: (url, init) => {
+        if (url.origin === CI && init?.method === 'POST' && url.pathname === '/api/v1/products') {
+          intentos++;
+          return respuesta({ success: false, error: { code: 'VALIDATION_ERROR' } }, 400);
+        }
+        return null;
+      },
+    });
+    expect(m.primera).toMatchObject({ conError: 1 });
+    expect(m.estado.eventos({ estado: 'error' })).toMatchObject([
+      { sku: 'SKU-200', sistema: 'coreinbox' },
+    ]);
+    await m.pasada();
+    expect(intentos).toBe(1);
+    expect(m.mundo.coreinbox.some((c) => c.sku === 'SKU-200')).toBe(false);
   });
 });
 

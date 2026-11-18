@@ -428,6 +428,22 @@ export class RegistroCatalogo {
   }
 
   /**
+   * Si lo publicado en la web con SKU que falta en Coreinbox se crea allá
+   * (`COREINBOX_CREAR_DESDE_WEB` con `coreinbox` en `PRODUCTOS_ESCRIBIR_SISTEMAS`). Queda guardado
+   * para que el cálculo del canónico lo vea venga de donde venga (la pasada o el panel).
+   */
+  crearEnCoreinboxDesdeWeb(): boolean {
+    return this.claves.leer('catalogo_coreinbox_desde_web') === 'true';
+  }
+
+  /** Fija lo anterior; devuelve si cambió (entonces hay que recalcular el catálogo). */
+  fijarCrearEnCoreinboxDesdeWeb(valor: boolean): boolean {
+    if (this.crearEnCoreinboxDesdeWeb() === valor) return false;
+    this.claves.guardar('catalogo_coreinbox_desde_web', valor ? 'true' : null);
+    return true;
+  }
+
+  /**
    * Marca la primera escritura: desde aquí cuenta «último cambio». Los cambios vistos antes se
    * olvidan (la primera escritura aplica el arranque), salvo lo que una persona eligió al resolver
    * un conflicto, que cuenta como un cambio de ese sistema en este momento.

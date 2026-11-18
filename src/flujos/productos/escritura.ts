@@ -4,8 +4,8 @@
  * (`escrituras` y `crearEn`) y los empates confirmados con los históricos de Emite DTE.
  *
  * - **Orden por SKU:** adoptar el histórico con el código exacto (empate confirmado), crear lo que
- *   falte del alcance (en Emite DTE y, si está aprobado, en la web; en Coreinbox sólo un alta del
- *   panel), fusionar los demás históricos confirmados en el canónico y escribir los campos que
+ *   falte del alcance (en Emite DTE y, si está aprobado, en la web; en Coreinbox un alta del panel
+ *   y, con `COREINBOX_CREAR_DESDE_WEB`, un bien publicado en la web), fusionar los demás históricos confirmados en el canónico y escribir los campos que
  *   difieren. Lo creado queda como su lectura, con el eco marcado.
  * - **Eco:** cada escritura anota `escritoValor` en el campo del sistema destino; la lectura
  *   siguiente que lo devuelve no es un cambio. Mientras no se vuelve a leer, no se reescribe.
@@ -215,38 +215,71 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
     return categorias.get(nombre.trim())?.id ?? null;
   };
 
-  // --- Coreinbox: crear sólo lo que nació en el panel ---
+  // --- Coreinbox: crear lo que nació en el panel o, con la variable, en la web ---
+
+  /**
+   * La carga de un producto nuevo en Coreinbox: la del alta (con su tipo, activo y la categoría por
+   * nombre, que se resuelve a su id al mandarla) o, sin alta, la del canónico de un bien publicado
+   * en la web: activo y sin categoría (las de la web no son las de Coreinbox).
+   */
+  const nuevoEnCoreinbox = (
+    p: ProductoCatalogo,
+  ): { datos: ProductoNuevoCoreinbox; categoria: string | null; activo: boolean } | null => {
+    const alta = registro.alta(p.sku);
+    if (alta) {
+      return {
+        datos: {
+          name: alta.nombre,
+          sku: alta.sku,
+          type: alta.tipo === 'servicio' ? 'service' : 'product',
+          unitPrice: netoDesdeBruto(alta.precio, alta.exento ? 0 : TASA_IVA),
+          currencyCode: 'CLP',
+          isTaxable: !alta.exento,
+        },
+        categoria: alta.categoria,
+        activo: alta.activo,
+      };
+    }
+    const nombre = p.canonico.nombre?.valor;
+    const precio = p.canonico.precio?.valor;
+    if (typeof nombre !== 'string' || typeof precio !== 'number') return null;
+    const exento = p.canonico.exento?.valor === true;
+    return {
+      datos: {
+        name: nombre,
+        sku: p.sku,
+        type: 'product',
+        unitPrice: netoDesdeBruto(precio, exento ? 0 : TASA_IVA),
+        currencyCode: 'CLP',
+        isTaxable: !exento,
+      },
+      categoria: null,
+      activo: true,
+    };
+  };
 
   const crearEnCoreinbox = async (p: ProductoCatalogo): Promise<void> => {
-    const alta = registro.alta(p.sku);
-    if (!alta) return;
-    const exento = alta.exento;
-    // La carga es el alta: la categoría va por nombre y se resuelve a su id al mandarla.
-    const datos: ProductoNuevoCoreinbox = {
-      name: alta.nombre,
-      sku: alta.sku,
-      type: alta.tipo === 'servicio' ? 'service' : 'product',
-      unitPrice: netoDesdeBruto(alta.precio, exento ? 0 : TASA_IVA),
-      currencyCode: 'CLP',
-      isTaxable: !exento,
-    };
+    const desdePanel = registro.alta(p.sku) !== null;
+    const nuevo = nuevoEnCoreinbox(p);
+    if (!nuevo) return;
+    const { datos, categoria, activo } = nuevo;
     let sinCategoria = false;
     const creado = await operar(
       {
         sku: p.sku,
         sistema: 'coreinbox',
         operacion: 'crear',
-        carga: { ...datos, categoria: alta.categoria },
+        carga: desdePanel ? { ...datos, categoria } : datos,
       },
       async (): Promise<ProductoCoreinbox> => {
-        const categoryId = alta.categoria ? await categoriaCoreinbox(alta.categoria) : null;
-        sinCategoria = alta.categoria !== null && categoryId === null;
-        const nuevo = await d.coreinbox.crearProducto({
+        const categoryId = categoria ? await categoriaCoreinbox(categoria) : null;
+        sinCategoria = categoria !== null && categoryId === null;
+        const hecho = await d.coreinbox.crearProducto({
           ...datos,
           ...(categoryId ? { categoryId } : {}),
         });
         // `CreateProductDto` no acepta `isActive`: un alta inactiva se desactiva enseguida.
-        return alta.activo ? nuevo : d.coreinbox.actualizarProducto(nuevo.id, { isActive: false });
+        return activo ? hecho : d.coreinbox.actualizarProducto(hecho.id, { isActive: false });
       },
     );
     if (!creado.ok) return;
@@ -259,18 +292,21 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       'categoria',
     ]);
     r.creados++;
-    const aviso = sinCategoria
-      ? `; sin categoría: «${alta.categoria ?? ''}» no existe en Coreinbox`
-      : '';
-    evento('creado', p.sku, 'coreinbox', {
-      idExterno: creado.valor.id,
-      mensaje: `creado en Coreinbox desde el panel${aviso}`,
-    });
-    log(sinCategoria ? 'warn' : 'info', 'producto del panel creado en Coreinbox', {
-      sku: p.sku,
-      coreinboxId: creado.valor.id,
-      ...(sinCategoria ? { categoriaQueNoExiste: alta.categoria } : {}),
-    });
+    const mensaje = !desdePanel
+      ? 'creado en Coreinbox desde la web; sin categoría'
+      : `creado en Coreinbox desde el panel${
+          sinCategoria ? `; sin categoría: «${categoria ?? ''}» no existe en Coreinbox` : ''
+        }`;
+    evento('creado', p.sku, 'coreinbox', { idExterno: creado.valor.id, mensaje });
+    log(
+      sinCategoria ? 'warn' : 'info',
+      `producto ${desdePanel ? 'del panel' : 'de la web'} creado en Coreinbox`,
+      {
+        sku: p.sku,
+        coreinboxId: creado.valor.id,
+        ...(sinCategoria ? { categoriaQueNoExiste: categoria } : {}),
+      },
+    );
   };
 
   // --- Emite DTE: adoptar, crear y fusionar ---

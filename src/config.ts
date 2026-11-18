@@ -23,8 +23,10 @@ export interface Config {
   /**
    * Catálogo de productos. Con `escribir` en `false` (por omisión) la pasada sólo lee los tres
    * sistemas; en `true` además escribe el canónico en los `sistemas` (por omisión los tres).
+   * `crearEnCoreinboxDesdeWeb`: lo publicado en la web con SKU que falta en Coreinbox se crea allá
+   * (`COREINBOX_CREAR_DESDE_WEB`, sólo si `coreinbox` está entre los `sistemas`).
    */
-  productos: { escribir: boolean; sistemas: SistemaCatalogo[] };
+  productos: { escribir: boolean; sistemas: SistemaCatalogo[]; crearEnCoreinboxDesdeWeb: boolean };
   /** Clave de `GET /catalogo` y sus acciones; `null` deja esas rutas sin montar (404). */
   catalogoApiKey: string | null;
   /** Para el log al arrancar: variables obsoletas o flujos pedidos que todavía no existen. */
@@ -67,6 +69,12 @@ export function leerConfig(env: NodeJS.ProcessEnv = process.env): Config {
     avisos.push('SINCRONIZAR_PRODUCTOS está obsoleta: usa FLUJO_PRODUCTOS (se lee como alias)');
   }
   const sistemas = sistemasDe(env.PRODUCTOS_ESCRIBIR_SISTEMAS);
+  const desdeWeb = bandera('COREINBOX_CREAR_DESDE_WEB', false);
+  if (desdeWeb && !sistemas.includes('coreinbox')) {
+    avisos.push(
+      'COREINBOX_CREAR_DESDE_WEB no rige: falta coreinbox en PRODUCTOS_ESCRIBIR_SISTEMAS',
+    );
+  }
   if (bandera('FLUJO_PEDIDOS', false)) {
     avisos.push('FLUJO_PEDIDOS: el flujo de pedidos no está implementado todavía; se ignora');
   }
@@ -87,7 +95,11 @@ export function leerConfig(env: NodeJS.ProcessEnv = process.env): Config {
     woocommerce: configWooDesdeEnv(env),
     desde,
     flujos: { cotizaciones: bandera('FLUJO_COTIZACIONES', true), productos, pedidos: false },
-    productos: { escribir: bandera('PRODUCTOS_ESCRIBIR', false), sistemas },
+    productos: {
+      escribir: bandera('PRODUCTOS_ESCRIBIR', false),
+      sistemas,
+      crearEnCoreinboxDesdeWeb: desdeWeb && sistemas.includes('coreinbox'),
+    },
     catalogoApiKey: env.CATALOGO_API_KEY?.trim() || null,
     avisos,
     intervaloS: Math.max(10, Number(env.INTERVALO_S) || 60),

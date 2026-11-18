@@ -848,3 +848,97 @@ describe('calcularProducto: crearEn', () => {
     expect(rechazado.crearEn).not.toContain('woocommerce');
   });
 });
+
+describe('calcularProducto: crear en Coreinbox desde la web', () => {
+  const enWeb = (campos: Partial<Record<CampoCatalogo, ValorCampo>> = {}, estado = 'publish') =>
+    lectura(
+      'woocommerce',
+      { nombre: 'Taza térmica', precio: 5990, activo: estado === 'publish', ...campos },
+      { extra: { estado } },
+    );
+  const publicado = (extra: Partial<EntradaCanonico> = {}) =>
+    entrada({
+      lecturas: { woocommerce: enWeb() },
+      visibilidad: decision('aprobado'),
+      crearEnCoreinboxDesdeWeb: true,
+      ...extra,
+    });
+  const sinCrear = (p: ProductoCatalogo) => expect(p.crearEn).not.toContain('coreinbox');
+
+  it('un bien publicado y aprobado con nombre y precio se crea en Coreinbox', () => {
+    const p = calcularProducto(publicado());
+    expect(p.faltaEn).toContain('coreinbox');
+    expect(p.crearEn).toContain('coreinbox');
+    expect(p.avisos).toEqual([]);
+  });
+
+  it('con la variable apagada no se crea, como antes', () => {
+    sinCrear(calcularProducto(publicado({ crearEnCoreinboxDesdeWeb: false })));
+    sinCrear(calcularProducto(publicado({ crearEnCoreinboxDesdeWeb: undefined })));
+  });
+
+  it('un borrador en la tienda no se crea aunque esté aprobado', () => {
+    sinCrear(calcularProducto(publicado({ lecturas: { woocommerce: enWeb({}, 'draft') } })));
+  });
+
+  it('publicado pero sin aprobar (propuesto o rechazado) no se crea', () => {
+    sinCrear(calcularProducto(publicado({ visibilidad: null })));
+    sinCrear(calcularProducto(publicado({ visibilidad: decision('propuesto') })));
+    sinCrear(calcularProducto(publicado({ visibilidad: decision('rechazado') })));
+  });
+
+  it('un servicio nunca nace en la web', () => {
+    const p = calcularProducto(
+      publicado({
+        lecturas: {
+          woocommerce: enWeb(),
+          emite: lectura('emite', { nombre: 'Taza térmica', precio: 5990, tipo: 'servicio' }),
+        },
+        reglas: [regla('*', 'tipo', 'emite')],
+      }),
+    );
+    expect(p.tipo).toBe('servicio');
+    sinCrear(p);
+  });
+
+  it('sin precio canónico avisa en vez de crear', () => {
+    const p = calcularProducto(publicado({ lecturas: { woocommerce: enWeb({ precio: null }) } }));
+    sinCrear(p);
+    expect(p.avisos).toContain('Falta en Coreinbox pero no tiene nombre y precio para crearlo');
+  });
+
+  it('un homónimo sin SKU en Coreinbox (sin tildes, espacios ni mayúsculas) lo frena con un aviso', () => {
+    const p = calcularProducto(publicado({ nombresSinSkuCoreinbox: new Set(['tazatermica']) }));
+    sinCrear(p);
+    expect(p.avisos).toContain(
+      'Coreinbox tiene un producto sin SKU con el mismo nombre: ponerle el SKU allá',
+    );
+  });
+
+  it('lo que ya está en Coreinbox no se vuelve a crear, y la categoría de la web no se le lleva', () => {
+    const conCoreinbox = (crearEnCoreinboxDesdeWeb: boolean) =>
+      publicado({
+        crearEnCoreinboxDesdeWeb,
+        lecturas: {
+          woocommerce: enWeb({ categoria: 'Tazas' }),
+          coreinbox: lectura('coreinbox', {
+            nombre: 'Taza térmica',
+            precio: 5990,
+            activo: true,
+            tipo: 'bien',
+            categoria: null,
+          }),
+        },
+        primeraEscritura: PRIMERA,
+      });
+    const p = calcularProducto(conCoreinbox(true));
+    sinCrear(p);
+    expect(p.escrituras.filter((w) => w.sistema === 'coreinbox')).toEqual([]);
+    // Con la variable apagada sigue como antes: la categoría de la web se planea para Coreinbox.
+    expect(
+      calcularProducto(conCoreinbox(false)).escrituras.filter((w) => w.sistema === 'coreinbox'),
+    ).toEqual([
+      { sistema: 'coreinbox', campo: 'categoria', antes: null, valor: 'Tazas', revierte: false },
+    ]);
+  });
+});

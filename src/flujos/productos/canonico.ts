@@ -23,6 +23,9 @@
  *   en todos; con propietario, sólo en el propietario, y de ahí se propaga como siempre. Un cambio
  *   visto después en un sistema que cuenta la deja atrás. `pendientesCerradas` dice cuáles ya
  *   están en los sistemas.
+ * - **Crear en Coreinbox:** lo que nace en el panel y, con `COREINBOX_CREAR_DESDE_WEB`, un bien
+ *   publicado en la web (aprobado y publicado allá) con nombre y precio, salvo que Coreinbox ya
+ *   tenga un producto sin SKU con el mismo nombre (hay que ponerle el SKU allá).
  */
 import type {
   AltaPendiente,
@@ -44,6 +47,7 @@ import type {
   VisibilidadWeb,
 } from '../../estado-catalogo.js';
 import { CAMPOS_COMPARTIDOS, SISTEMAS_CATALOGO } from '../../estado-catalogo.js';
+import { claveDeNombre } from './empates.js';
 import { LARGO_CATEGORIA, LARGO_NOMBRE } from './mapeo.js';
 
 export const TASA_IVA = 0.19;
@@ -186,6 +190,10 @@ export interface EntradaCanonico {
   alta?: AltaPendiente | null;
   /** Ediciones del panel que la pasada todavía no deja en los sistemas. */
   ediciones?: EdicionPendiente[];
+  /** Crear en Coreinbox lo publicado en la web que falte allá (`COREINBOX_CREAR_DESDE_WEB`). */
+  crearEnCoreinboxDesdeWeb?: boolean;
+  /** Los nombres (`claveDeNombre`) de los productos de Coreinbox sin SKU. */
+  nombresSinSkuCoreinbox?: ReadonlySet<string>;
 }
 
 const valorDe = (l: LecturaGuardada | undefined, campo: CampoCatalogo): ValorCampo =>
@@ -360,8 +368,22 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   const escrituras = planificar(e, canonico, visibilidadWeb, primera, soloEn);
   const crearEn: SistemaCatalogo[] = [];
   const nombre = canonico.nombre?.valor;
-  // En Coreinbox sólo se crea lo que nació en el panel.
-  if (faltaEn.includes('coreinbox') && e.alta) crearEn.push('coreinbox');
+  // En Coreinbox se crea lo que nació en el panel y, con la variable, un bien publicado en la web.
+  if (faltaEn.includes('coreinbox')) {
+    if (e.alta) crearEn.push('coreinbox');
+    else if (
+      e.crearEnCoreinboxDesdeWeb &&
+      visibilidadWeb === 'aprobado' &&
+      publicado &&
+      tipo === 'bien'
+    ) {
+      if (typeof nombre !== 'string' || typeof precio !== 'number') {
+        avisos.push('Falta en Coreinbox pero no tiene nombre y precio para crearlo');
+      } else if (e.nombresSinSkuCoreinbox?.has(claveDeNombre(nombre))) {
+        avisos.push('Coreinbox tiene un producto sin SKU con el mismo nombre: ponerle el SKU allá');
+      } else crearEn.push('coreinbox');
+    }
+  }
   // Sólo se crea lo que viene de una fuente: un producto que existe sólo en Emite DTE se queda ahí.
   if (faltaEn.includes('emite') && (e.alta || e.lecturas.coreinbox || e.lecturas.woocommerce)) {
     if (e.noCrearEnEmite) avisos.push(e.noCrearEnEmite);
@@ -409,6 +431,16 @@ function planificar(
       const c = canonico[campo];
       if (!c || c.conflicto) continue;
       if (soloEn.has(campo) && soloEn.get(campo) !== sistema) continue;
+      // Coreinbox manda en categoría y las de la web no son las suyas: lo creado desde la web queda
+      // sin categoría allá hasta que alguien se la ponga en Coreinbox.
+      if (
+        e.crearEnCoreinboxDesdeWeb &&
+        sistema === 'coreinbox' &&
+        campo === 'categoria' &&
+        c.fuente === 'woocommerce'
+      ) {
+        continue;
+      }
       let valor = c.valor;
       if (sistema === 'woocommerce' && campo === 'activo') {
         if (visibilidad !== 'aprobado') valor = false;

@@ -37,7 +37,7 @@ import {
   modoDe,
   pendientesCerradas,
 } from './canonico.js';
-import { indexarCanonicos, proponerEmpate } from './empates.js';
+import { claveDeNombre, indexarCanonicos, proponerEmpate } from './empates.js';
 import { unidadEmite } from './mapeo.js';
 
 export interface DependenciasLectura {
@@ -325,6 +325,17 @@ export function recalcular(registro: RegistroCatalogo, sku: string): void {
     if (empate?.estado === 'confirmado') break;
   }
   const reglas = registro.reglas().filter((r) => r.ambito === '*' || r.ambito === sku);
+  const desdeWeb = registro.crearEnCoreinboxDesdeWeb();
+  // Los sin SKU de Coreinbox sólo importan para crear allá lo que nace en la web.
+  const nombresSinSkuCoreinbox =
+    desdeWeb && !lecturas.coreinbox && !alta && lecturas.woocommerce
+      ? new Set(
+          registro
+            .sinSku()
+            .filter((s) => s.sistema === 'coreinbox')
+            .map((s) => claveDeNombre(s.nombre)),
+        )
+      : undefined;
   const entrada: EntradaCanonico = {
     sku,
     lecturas,
@@ -337,6 +348,8 @@ export function recalcular(registro: RegistroCatalogo, sku: string): void {
     avisos,
     alta,
     ediciones: registro.pendientes(sku),
+    crearEnCoreinboxDesdeWeb: desdeWeb,
+    ...(nombresSinSkuCoreinbox ? { nombresSinSkuCoreinbox } : {}),
   };
   const producto = calcularProducto(entrada);
   if (alta && producto.faltaEn.length === 0) {

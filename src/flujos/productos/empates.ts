@@ -42,6 +42,11 @@ export function normalizarTexto(texto: string): string {
     .trim();
 }
 
+/** Un nombre normalizado y sin espacios: dos nombres con la misma clave son el mismo. */
+export function claveDeNombre(texto: string): string {
+  return normalizarTexto(texto).replaceAll(' ', '');
+}
+
 type Bigramas = ReadonlyMap<string, number>;
 
 /** Multiconjunto de bigramas del texto ya normalizado; un solo carácter es su propio «bigrama». */

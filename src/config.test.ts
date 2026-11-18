@@ -126,6 +126,25 @@ describe('leerConfig: catálogo', () => {
     );
   });
 
+  it('COREINBOX_CREAR_DESDE_WEB viene apagada y rige sólo con coreinbox entre los sistemas', () => {
+    expect(leerConfig({ ...BASE }).productos.crearEnCoreinboxDesdeWeb).toBe(false);
+    const encendida = leerConfig({ ...BASE, COREINBOX_CREAR_DESDE_WEB: 'true' });
+    expect(encendida.productos.crearEnCoreinboxDesdeWeb).toBe(true);
+    expect(encendida.avisos).toEqual([]);
+    const sinCoreinbox = leerConfig({
+      ...BASE,
+      COREINBOX_CREAR_DESDE_WEB: 'true',
+      PRODUCTOS_ESCRIBIR_SISTEMAS: 'emite,woocommerce',
+    });
+    expect(sinCoreinbox.productos.crearEnCoreinboxDesdeWeb).toBe(false);
+    expect(sinCoreinbox.avisos).toEqual([
+      'COREINBOX_CREAR_DESDE_WEB no rige: falta coreinbox en PRODUCTOS_ESCRIBIR_SISTEMAS',
+    ]);
+    expect(() => leerConfig({ ...BASE, COREINBOX_CREAR_DESDE_WEB: 'quizas' })).toThrow(
+      /COREINBOX_CREAR_DESDE_WEB/,
+    );
+  });
+
   it('CATALOGO_API_KEY ausente o en blanco queda en null', () => {
     expect(leerConfig({ ...BASE }).catalogoApiKey).toBeNull();
     expect(leerConfig({ ...BASE, CATALOGO_API_KEY: '   ' }).catalogoApiKey).toBeNull();

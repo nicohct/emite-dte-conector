@@ -7,6 +7,7 @@ import { esTransitorio } from './flujos/comun.js';
 import { pasada } from './flujos/cotizaciones/pasada.js';
 import { atenderCatalogo, configurarCatalogo } from './flujos/productos/api.js';
 import { pasadaCatalogo } from './flujos/productos/catalogo.js';
+import { recalcularTodo } from './flujos/productos/lectura.js';
 import { log } from './log.js';
 import { crearDescargaImagen } from './panel/imagen.js';
 import { crearPanel } from './panel/index.js';
@@ -16,6 +17,10 @@ import { crearServidor } from './servidor.js';
 const config = leerConfig();
 for (const aviso of config.avisos) log('warn', aviso);
 const estado = new Estado(config.estadoRuta);
+// Lo que se crea en Coreinbox es parte del canónico guardado: al cambiar la variable se recalcula.
+if (estado.catalogo.fijarCrearEnCoreinboxDesdeWeb(config.productos.crearEnCoreinboxDesdeWeb)) {
+  recalcularTodo(estado.catalogo);
+}
 const coreinbox = new Coreinbox(config.coreinbox.url, config.coreinbox.apiKey);
 const emite = new EmiteDte(config.emite.url, config.emite.apiKey);
 const woocommerce = config.woocommerce ? new WooCommerce(config.woocommerce) : null;

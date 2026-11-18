@@ -17,10 +17,14 @@ import { crearServidor } from './servidor.js';
 const config = leerConfig();
 for (const aviso of config.avisos) log('warn', aviso);
 const estado = new Estado(config.estadoRuta);
-// Lo que se crea en Coreinbox es parte del canónico guardado: al cambiar la variable se recalcula.
-if (estado.catalogo.fijarCrearEnCoreinboxDesdeWeb(config.productos.crearEnCoreinboxDesdeWeb)) {
-  recalcularTodo(estado.catalogo);
-}
+// El canónico guardado es derivado: se recalcula si una versión nueva cambió lo leído (`migrar`) o
+// si cambió lo que se crea en Coreinbox.
+const migrado = estado.catalogo.migrar();
+const desdeWebCambio = estado.catalogo.fijarCrearEnCoreinboxDesdeWeb(
+  config.productos.crearEnCoreinboxDesdeWeb,
+);
+if (migrado || desdeWebCambio) recalcularTodo(estado.catalogo);
+if (migrado) log('info', 'registro del catálogo puesto al día y recalculado');
 const coreinbox = new Coreinbox(config.coreinbox.url, config.coreinbox.apiKey);
 const emite = new EmiteDte(config.emite.url, config.emite.apiKey);
 const woocommerce = config.woocommerce ? new WooCommerce(config.woocommerce) : null;

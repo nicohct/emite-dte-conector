@@ -9,10 +9,14 @@
  *   DTE (sin Emite DTE, de Coreinbox) y `nombre` y `precio` van por último cambio. Una regla del
  *   panel (`*` o un SKU) fija otro propietario o pone «último cambio».
  * - **Regla de arranque:** antes de la primera escritura «último cambio» no rige: en nombre y
- *   precio manda la web y, sin web, Coreinbox. Es lo que aplica la primera escritura. Después, sin
- *   ningún cambio visto, sigue valiendo el arranque.
+ *   precio manda la web y, sin web, Coreinbox (en precio, después Emite DTE). Es lo que aplica la
+ *   primera escritura. Después, sin ningún cambio visto, sigue valiendo el arranque.
  * - **Precio:** bruto entero en pesos; se compara siempre en bruto. El neto (dos decimales) es
- *   derivado, con el IVA de cada sistema.
+ *   derivado, con el IVA de cada sistema. La web sin precio (vacío o 0, «a cotizar») no tiene
+ *   valor: no es canónico, ni diferencia, ni cambio, y el hub nunca le escribe un precio salvo
+ *   que venga del panel (una edición o un alta). Cuando el precio sale del orden del arranque (o
+ *   de un suplente del propietario), un precio mayor que 0 gana a un 0: un 0 de Coreinbox nunca
+ *   pisa en la primera escritura el precio de Emite DTE.
  * - **Visibilidad web:** un servicio nunca va (`no_aplica`); si no, una decisión manda (lo que la
  *   lectura vio publicado en la web queda aprobado con usuario `web`); sin decisión, un producto de
  *   una categoría fuera de la web queda `rechazado` (motivo `categoria`) y el resto, incluido un
@@ -24,8 +28,8 @@
  *   visto después en un sistema que cuenta la deja atrás. `pendientesCerradas` dice cuáles ya
  *   están en los sistemas.
  * - **Crear en Coreinbox:** lo que nace en el panel y, con `COREINBOX_CREAR_DESDE_WEB`, un bien
- *   publicado en la web (aprobado y publicado allá) con nombre y precio, salvo que Coreinbox ya
- *   tenga un producto sin SKU con el mismo nombre (hay que ponerle el SKU allá).
+ *   publicado en la web (aprobado y publicado allá) con nombre y precio en la web, salvo que
+ *   Coreinbox ya tenga un producto sin SKU con el mismo nombre (hay que ponerle el SKU allá).
  */
 import type {
   AltaPendiente,
@@ -55,7 +59,7 @@ export const TASA_IVA = 0.19;
 /** Quién manda al arrancar (y en modo propietario sin regla), en orden de preferencia. */
 export const FUENTES_DE_ARRANQUE: Record<CampoCatalogo, SistemaCatalogo[]> = {
   nombre: ['woocommerce', 'coreinbox'],
-  precio: ['woocommerce', 'coreinbox'],
+  precio: ['woocommerce', 'coreinbox', 'emite'],
   activo: ['coreinbox', 'woocommerce'],
   tipo: ['coreinbox', 'woocommerce'],
   categoria: ['coreinbox', 'woocommerce'],
@@ -214,6 +218,7 @@ function edicionSuperada(e: EntradaCanonico, ed: EdicionPendiente): string | nul
     const c = s ? e.lecturas[s]?.campos[ed.campo] : undefined;
     if (
       c?.cambioEn != null &&
+      c.valor !== null &&
       Date.parse(c.cambioEn) > Date.parse(ed.en) &&
       !igualesEn(ed.campo, c.valor, ed.valor)
     ) {
@@ -282,16 +287,25 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   const canonico: Partial<Record<CampoCatalogo, ValorCanonico>> = {};
   for (const campo of CAMPOS_CANONICOS) {
     const modo = modoDe(e.reglas, e.sku, campo);
-    const primeroCon = (orden: SistemaCatalogo[]): ValorCanonico => {
-      for (const fuente of orden) {
-        const v = valorDe(e.lecturas[fuente], campo);
-        if (v !== null) return { valor: v, fuente, modo: modo.modo };
-      }
-      return { valor: null, fuente: null, modo: modo.modo };
+    /**
+     * El primero del orden con valor. En precio, `dueno` (el propietario explícito o el sistema
+     * del último cambio) manda aunque tenga 0; entre los demás un precio mayor que 0 gana a un 0.
+     */
+    const primeroCon = (orden: SistemaCatalogo[], dueno?: SistemaCatalogo): ValorCanonico => {
+      const con = orden
+        .map((fuente) => ({ fuente, v: valorDe(e.lecturas[fuente], campo) }))
+        .filter((x) => x.v !== null);
+      const elegido =
+        campo === 'precio' && con[0]?.fuente !== dueno
+          ? (con.find((x) => typeof x.v === 'number' && x.v > 0) ?? con[0])
+          : con[0];
+      return elegido
+        ? { valor: elegido.v, fuente: elegido.fuente, modo: modo.modo }
+        : { valor: null, fuente: null, modo: modo.modo };
     };
     let elegido: ValorCanonico;
     if (modo.modo === 'propietario') {
-      elegido = primeroCon(modo.orden);
+      elegido = primeroCon(modo.orden, modo.orden[0]);
     } else {
       // Último cambio: el más reciente que no sea eco; sin ninguno (o antes de la primera
       // escritura), el arranque. Dos a la misma hora los desempata el orden del arranque.
@@ -303,7 +317,7 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
             .filter((x) => x.c?.cambioEn && x.c.valor !== null)
             .sort((a, b) => Date.parse(b.c?.cambioEn ?? '') - Date.parse(a.c?.cambioEn ?? ''))
         : [];
-      elegido = primeroCon(cambios[0] ? [cambios[0].s] : arranque);
+      elegido = cambios[0] ? primeroCon([cambios[0].s], cambios[0].s) : primeroCon(arranque);
     }
     const edicion = ediciones.get(campo);
     if (e.alta) {
@@ -377,7 +391,11 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
       publicado &&
       tipo === 'bien'
     ) {
-      if (typeof nombre !== 'string' || typeof precio !== 'number') {
+      if (valorDe(e.lecturas.woocommerce, 'precio') === null) {
+        avisos.push(
+          'Falta en Coreinbox y la web no tiene precio: crearlo en Coreinbox o desde el panel',
+        );
+      } else if (typeof nombre !== 'string' || typeof precio !== 'number') {
         avisos.push('Falta en Coreinbox pero no tiene nombre y precio para crearlo');
       } else if (e.nombresSinSkuCoreinbox?.has(claveDeNombre(nombre))) {
         avisos.push('Coreinbox tiene un producto sin SKU con el mismo nombre: ponerle el SKU allá');
@@ -413,8 +431,9 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
 /**
  * Qué campo se escribe en qué sistema: lo que difiere del canónico al compararlo (en bruto el
  * precio), salvo los campos en conflicto o sin valor canónico. En la web `activo` es el estado:
- * publicado sólo si está aprobado y activo; rechazado o `no_aplica` pasa a borrador. Lo que viene
- * del panel nunca es una reversión, y una edición con propietario va sólo a él (`soloEn`).
+ * publicado sólo si está aprobado y activo; rechazado o `no_aplica` pasa a borrador, y a un
+ * producto sin precio allá no se le pone uno salvo que venga del panel. Lo que viene del panel
+ * nunca es una reversión, y una edición con propietario va sólo a él (`soloEn`).
  */
 function planificar(
   e: EntradaCanonico,
@@ -450,6 +469,16 @@ function planificar(
       } else {
         if (valor === null) continue;
         if (campo === 'precio' && sistema === 'coreinbox' && l.extra.moneda !== 'CLP') continue;
+        // El hub no publica precios que la tienda no muestra (ni un 0, que allá es «sin precio»);
+        // una persona desde el panel, sí.
+        if (
+          campo === 'precio' &&
+          sistema === 'woocommerce' &&
+          c.fuente !== 'panel' &&
+          (valorDe(l, 'precio') === null || !(typeof valor === 'number' && valor > 0))
+        ) {
+          continue;
+        }
         if (igualesEn(campo, valorDe(l, campo), valor)) continue;
       }
       const leido = l.campos[campo];

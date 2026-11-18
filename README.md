@@ -133,6 +133,17 @@ Campos compartidos:
 - **`nombre`**.
 - **`precio`**: bruto entero en pesos. Coreinbox y Emite DTE se llevan a bruto desde su neto con su
   tasa (los exentos, sin IVA). Se compara siempre en bruto; el neto a dos decimales es derivado.
+  **En la web, un precio vacío o 0 es «sin precio»** (los productos «a cotizar» no muestran precio):
+  se lee como `null`, no puede volverse canónico y no cuenta como diferencia, cambio ni conflicto.
+  El canónico sale entonces del siguiente sistema que tenga precio (Coreinbox y, si no, Emite DTE),
+  y **el hub nunca le escribe un precio a la web si allá no tiene**: sólo lo hace una decisión de una
+  persona en el panel (una edición de precio o un alta). Si alguien le pone precio en la tienda,
+  desde ahí vuelve a regir la regla normal; si se lo quita, los demás sistemas conservan el suyo.
+  Tampoco se escribe un 0 en la web. En Coreinbox y Emite DTE un 0 sí es un precio (ninguno de los
+  dos lo rechaza), pero cuando el precio sale del orden del arranque (o de un suplente del
+  propietario) un precio mayor que 0 gana a un 0: un 0 de Coreinbox nunca pisa en la primera
+  escritura el precio de Emite DTE. Un propietario fijado en el panel, o un cambio a 0 hecho
+  después de la primera escritura, sí manda con su 0.
 - **`activo`**: en la web significa publicado y no oculto.
 
 Además se leen `tipo` (bien o servicio: `service`, `license` y `subscription` son servicio),
@@ -149,7 +160,8 @@ los conflictos, los empates y el índice.
   escribe en los otros. Por omisión, `activo`, `tipo` y `categoria` son de Coreinbox (si Coreinbox no
   tiene el producto, de la web); `exento` es de Emite DTE (sin Emite DTE, de Coreinbox); `nombre` y
   `precio` van por último cambio. Antes de la primera escritura rige la **regla de arranque**: en
-  nombre y precio manda la web y, sin web, Coreinbox. Desde el panel se fija otro propietario o
+  nombre y precio manda la web y, sin web (o sin precio en la web), Coreinbox; en precio, después
+  Emite DTE. Desde el panel se fija otro propietario o
   «último cambio» (sólo en nombre, precio y activo), para todo el catálogo o en lote por SKU.
 - **Visibilidad web.** `no_aplica` (los servicios nunca van a la web); si no, una decisión
   (`aprobado` o `rechazado`) manda. Lo publicado hoy en la web arranca aprobado: cuando la lectura ve
@@ -159,7 +171,12 @@ los conflictos, los empates y el índice.
   `rechazado` con motivo `categoria`; el resto, incluido un borrador en la tienda, es `propuesto`.
   Una categoría fuera de la web nunca toca lo que tiene decisión, así que no despublica lo publicado.
 - **Alcance.** Servicio → Coreinbox y Emite DTE. Bien aprobado → los tres. El resto → Coreinbox y
-  Emite DTE.
+  Emite DTE. **Que un producto esté en unos sistemas y no en otros es normal**: no todo va a la web,
+  y la web no manda en qué existe. «Falta en…» es sólo lo que le falta de su alcance; un producto
+  que no está en la web ni está aprobado para ella no «falta» en la web.
+- **Presencia.** En qué sistemas está cada SKU (tiene lectura con SKU allá). Se filtra con SQL sobre
+  la tabla de ids del registro, sin recorrer el JSON del producto, y el resumen cuenta cada
+  combinación.
 - **Conflicto.** Un campo en «último cambio» cambiado en dos sistemas desde la pasada anterior, a
   valores distintos (en un campo con propietario gana el propietario). Queda abierto, con los valores
   y la hora de cada lado, hasta que alguien elija; mientras tanto ese campo no se escribe. Antes de la
@@ -178,6 +195,11 @@ los conflictos, los empates y el índice.
     fichas), imágenes, categorías y documentos (URLs a PDF o planos en los metadatos o la descripción).
   - Emite DTE: producto.
 - **Sin SKU.** Los productos sin SKU de Coreinbox o de la web se listan aparte y no entran al registro.
+- **Versiones del registro.** Al arrancar, `migrar` pone al día lo guardado por una versión anterior
+  y, si subió de versión, se recalcula todo el catálogo (es derivado). La versión 2 convierte el
+  precio 0 de la web ya guardado en «sin precio» (también en los sin SKU) y saca ese 0 de los
+  conflictos de precio abiertos (si no quedan dos valores distintos, el conflicto se borra). No hace
+  falta releer los sistemas ni intervenir a mano.
 - **Reconstruibilidad.** Lo derivado (lecturas, canónico, históricos, empates propuestos, índice, sin
   SKU y cursores) se reconstruye igual leyendo los tres sistemas si se borra el SQLite; hay una prueba
   que lo verifica. Lo operativo de la escritura (marcas de eco, hora de la primera escritura, bitácora
@@ -192,9 +214,13 @@ Protegidas con `Authorization: Bearer <CATALOGO_API_KEY>`. Sin esa variable, las
 Están pensadas para la red interna y el panel.
 
 - `GET /catalogo?pagina=1&limite=50` (máximo 200), con los filtros `q`, `diferencias=true`,
-  `conflicto=true`, `sin_sku=true` (le falta algún sistema de su alcance), `propuesto_web=true` y
-  `historicos=true` (tiene empates propuestos) y `pendientes=true` (tiene un alta o una edición del
-  panel sin escribir). Con `vista=historicos` (y `estado=propuesto|confirmado|rechazado|sin_candidato`)
+  `conflicto=true`, `falta_alcance=true` (le falta un sistema de su alcance; `sin_sku=true`, el
+  nombre anterior, sigue valiendo), `propuesto_web=true`, `historicos=true` (tiene empates
+  propuestos), `pendientes=true` (tiene un alta o una edición del panel sin escribir) y la
+  **presencia**: `en=…` (está en todos esos sistemas) y `no_en=…` (no está en ninguno), con
+  `coreinbox`, `woocommerce` o `emite`, repetidos o separados por coma. Por ejemplo, «sólo en
+  Coreinbox» es `en=coreinbox&no_en=woocommerce,emite` y «en Coreinbox y Emite DTE, no en la web»,
+  `en=coreinbox,emite&no_en=woocommerce`. Con `vista=historicos` (y `estado=propuesto|confirmado|rechazado|sin_candidato`)
   lista los históricos con sus empates; con `vista=sin_sku` (y `sistema=`) lista los productos sin SKU.
   Responde `{ vista, pagina, limite, total, items }`.
 - `GET /catalogo/{sku}`: canónico (valor, fuente y modo), `precioNeto`, tipo, alcance, visibilidad y
@@ -235,7 +261,7 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 - **Qué se escribe.** Por SKU y campo, el canónico (según el modo de [Quién manda](#modelo)) en cada
   sistema donde difiere, comparado en bruto el precio y sin espacios de más el nombre. Coreinbox
   recibe nombre, precio neto (con su propia tasa), activo, tipo y categoría; la web, nombre, precio
-  bruto y estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo,
+  bruto (sólo si allá tiene precio, o si viene del panel) y estado (`publish` o `draft`); Emite DTE, nombre, precio neto (con su exención), activo,
   tipo, categoría y exención (manda en ella; al cambiarla recibe también el neto que conserva el
   bruto). Un campo en conflicto no se escribe en ningún lado.
 - **Propietario.** Lo que cambie en otro sistema se revierte en la pasada siguiente y queda como evento
@@ -247,13 +273,16 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
   se vuelve a leer, tampoco se manda de nuevo.
 - **Crear.** Lo que falte en Emite DTE y tenga fuente (Coreinbox o la web) se crea con el SKU como
   código. No se crea si un histórico de Emite DTE ya usa ese código sin empate confirmado (queda un
-  aviso). En la web se crea sólo lo aprobado que falte: publicado si está activo, si no en borrador.
+  aviso). En la web se crea sólo lo aprobado que falte (aprobarlo es una decisión del panel):
+  publicado si está activo, si no en borrador, con el precio canónico (sin precio si es 0).
   **En Coreinbox se crea lo que nació en el panel** (un alta): con su tipo, neto, exención y la
   categoría resuelta a su id (si Coreinbox no tiene una categoría con ese nombre, se crea sin
   categoría y el evento `creado` lo avisa). Con `COREINBOX_CREAR_DESDE_WEB=true` (y `coreinbox` en
   `PRODUCTOS_ESCRIBIR_SISTEMAS`) también **lo que nace en la web**: un SKU que falta en Coreinbox se
   crea allá si está publicado en la web y su visibilidad es `aprobado` (un borrador o un
-  `propuesto` no), es un bien, tiene nombre y precio, y Coreinbox no tiene un producto sin SKU con
+  `propuesto` no), es un bien, tiene nombre y **precio en la web** (si la web no tiene precio, no se
+  crea y queda el aviso «Falta en Coreinbox y la web no tiene precio: crearlo en Coreinbox o desde
+  el panel»), y Coreinbox no tiene un producto sin SKU con
   el mismo nombre (sin tildes, espacios ni mayúsculas; si lo tiene, queda el aviso «Coreinbox tiene
   un producto sin SKU con el mismo nombre: ponerle el SKU allá»). Se crea activo, como bien, con el
   nombre y el neto canónicos, afecto salvo que el canónico diga exento, y **sin categoría**: las de
@@ -281,7 +310,8 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 - **Nunca** se borra nada en ningún sistema ni se cambia un código.
 
 **Primera escritura.** La primera pasada con `PRODUCTOS_ESCRIBIR=true` aplica la regla de arranque a
-todo lo que difiera (en nombre y precio, lo de la web) y desde ahí rige «último cambio»; los cambios
+todo lo que difiera (en nombre y precio, lo de la web; en precio, si la web no tiene, lo de Coreinbox
+y si no Emite DTE, prefiriendo un precio mayor que 0) y desde ahí rige «último cambio»; los cambios
 vistos mientras sólo se leía no cuentan. Antes de encenderla, el panel y `GET /catalogo/{sku}` ya
 muestran qué se escribirá: las diferencias, `escrituras` y `crearEn`.
 
@@ -469,9 +499,11 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
 
 - **Flujos** (`/panel` o `/panel/flujos`): por flujo (cotizaciones, productos, pedidos) si está
   activo, su cursor, contadores, última pasada, última falla con código, status y si fue transitoria,
-  y los errores recientes. La tarjeta **Catálogo** suma el resumen del registro (SKUs, leídos por
-  sistema, históricos, con diferencias, en conflicto, empates propuestos, sin SKU), cada cifra con
-  enlace a su lista filtrada.
+  y los errores recientes. La tarjeta **Catálogo** suma el resumen del registro (SKUs, el desglose
+  **por sistema** —en los tres, sólo en Coreinbox, sólo en la web, en Coreinbox y Emite DTE pero no
+  en la web, etc.— y cuántos no están en cada uno, los que tienen un sistema de su alcance por
+  crear, leídos por sistema, históricos, con diferencias, en conflicto, empates propuestos, sin
+  SKU), cada cifra con enlace a su lista filtrada.
 - **Eventos** (`/panel/eventos`): lo último que pasó, en orden inverso: cotizaciones creadas o con
   error, webhooks recibidos, productos sincronizados u omitidos, conflictos abiertos o resueltos,
   empates propuestos o decididos, acciones del panel y escrituras en los sistemas (con sistema y
@@ -480,12 +512,14 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
   acción) y `?pagina=2` (50 por página). Los enlaces a la cotización en Emite DTE usan
   `EMITE_URL_PUBLICA`.
 - **Productos** (`/panel/productos`): tabla por SKU con la foto, el valor canónico y el de cada
-  sistema en nombre, precio bruto y activo (los que difieren, marcados), tipo, alcance, visibilidad
-  web y avisos (con la marca «pendiente» si tiene algo del panel sin escribir). Filtros `q`,
-  `diferencias=1`, `conflicto=1`, `sin_sku=1`, `propuesto_web=1`, `pendientes=1` e
-  `historicos=1`, y paginación. Desde la misma pantalla, las vistas **Históricos** y **Sin SKU**
+  sistema en nombre, precio bruto y activo (los que difieren, marcados; la web sin precio dice
+  «sin precio»), tipo, sistemas (donde está; «(falta)» sólo lo que le falta de su alcance, y
+  tachado y tenue el que no está ni le corresponde), visibilidad web y avisos (con la marca
+  «pendiente» si tiene algo del panel sin escribir). Filtros `q`, `diferencias=1`, `conflicto=1`,
+  `falta_alcance=1` (antes `sin_sku=1`), `propuesto_web=1`, `pendientes=1`, `historicos=1` y las
+  casillas **Está en** (`en=…`) y **No está en** (`no_en=…`), una por sistema, y paginación. Desde la misma pantalla, las vistas **Históricos** y **Sin SKU**
   (`?vista=sin_sku&sistema=…`).
-- **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno,
+- **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno (la web sin precio, «sin precio»),
   reglas que le aplican, conflictos, empates con su histórico, lo que se escribirá, las últimas
   escrituras, índice de enlaces (cada URL abre el sistema en otra pestaña) y la foto principal.
 - **Históricos** (`/panel/historicos`): los productos históricos de Emite DTE con su uso y hasta
@@ -597,6 +631,8 @@ La última pasada y la última falla viven en memoria y se pierden al reiniciar.
   la consulta periódica por recepción, sin tocar lo demás.
 - Factura sólo en pesos. Una cotización en otra moneda queda con error y aviso en el negocio.
 - Un workspace de Coreinbox ↔ un emisor de Emite DTE. Para más, una instancia por par.
+- En precio, la web manda sólo al arrancar y después rige «último cambio». Que el conector mande
+  siempre en precio (y lo publique en cada sistema) es una fase futura.
 - El catálogo crea en Coreinbox lo que nace en el panel y, con `COREINBOX_CREAR_DESDE_WEB`, lo
   publicado en la web, pero nunca lo que existe sólo en Emite DTE ni la categoría de la web. No sube
   archivos (PR 7b), no borra en ningún sistema ni cambia códigos.

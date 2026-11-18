@@ -154,6 +154,7 @@ a { color: var(--enlace); }
 .tarjeta { border: 1px solid var(--borde); border-radius: 8px; padding: 12px 14px; }
 .tarjeta header { padding: 0 0 8px; border: 0; justify-content: space-between; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dl.presencia { gap: 2px 10px; font-size: 13px; }
 dt { color: var(--tenue); }
 dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .cifra, td.cifra { font-variant-numeric: tabular-nums; }
@@ -172,6 +173,8 @@ label { display: grid; gap: 2px; color: var(--tenue); font-size: 12px; }
 select, button, input[type="search"] { font: inherit; padding: 4px 8px; color: var(--texto); background: var(--fondo); border: 1px solid var(--borde); border-radius: 6px; }
 button { cursor: pointer; }
 label.casilla { display: flex; gap: 6px; align-items: center; color: var(--texto); font-size: 14px; }
+fieldset.presencia { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 0; padding: 2px 8px 4px; border: 1px solid var(--borde); border-radius: 6px; }
+fieldset.presencia legend { color: var(--tenue); font-size: 12px; padding: 0 4px; }
 .paginas { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
 .pestanas { display: flex; gap: 14px; margin-bottom: 12px; }
 .pestanas a[aria-current="page"] { color: var(--texto); font-weight: 600; text-decoration: none; }

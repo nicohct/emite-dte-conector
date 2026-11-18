@@ -1,6 +1,7 @@
 /** Las pantallas de los flujos y de los eventos (sólo lectura). */
 import type { Evento, FlujoEvento, TipoEvento } from '../estado.js';
-import type { ResumenCatalogo } from '../estado-catalogo.js';
+import type { ResumenCatalogo, SistemaCatalogo } from '../estado-catalogo.js';
+import { SISTEMAS_CATALOGO, clavePresencia } from '../estado-catalogo.js';
 import { NOMBRES_ACCIONES } from '../flujos/productos/acciones.js';
 import type { RespuestaSalud, UltimaFalla, UltimaPasada } from '../salud.js';
 import { cifra, enlaceExterno, fecha, html, paginas, type Html } from './html.js';
@@ -155,6 +156,61 @@ export interface DatosFlujos {
   base: string;
 }
 
+const SISTEMA_EN_TEXTO: Record<SistemaCatalogo, string> = {
+  coreinbox: 'Coreinbox',
+  woocommerce: 'la web',
+  emite: 'Emite DTE',
+};
+
+/** Las combinaciones de presencia en el orden en que se muestran, con su texto. */
+const PRESENCIAS: Array<[SistemaCatalogo[], string]> = [
+  [['coreinbox', 'woocommerce', 'emite'], 'En los tres'],
+  [['coreinbox', 'emite'], 'En Coreinbox y Emite DTE, no en la web'],
+  [['coreinbox', 'woocommerce'], 'En Coreinbox y la web, no en Emite DTE'],
+  [['woocommerce', 'emite'], 'En la web y Emite DTE, no en Coreinbox'],
+  [['coreinbox'], 'Sólo en Coreinbox'],
+  [['woocommerce'], 'Sólo en la web'],
+  [['emite'], 'Sólo en Emite DTE'],
+  [[], 'En ninguno todavía (alta del panel)'],
+];
+
+/** La lista de productos con exactamente esos sistemas. */
+export function rutaPresencia(presentes: readonly SistemaCatalogo[]): string {
+  const q = new URLSearchParams();
+  for (const s of SISTEMAS_CATALOGO) q.append(presentes.includes(s) ? 'en' : 'no_en', s);
+  return `productos?${q.toString()}`;
+}
+
+/**
+ * El desglose por presencia: estar en unos sistemas y no en otros es normal (no todo va a la web).
+ * Lo que de verdad falta es lo que le falta a un SKU de su alcance.
+ */
+function presencia(r: ResumenCatalogo, base: string): Html {
+  const n = (presentes: readonly SistemaCatalogo[]) => r.presencia[clavePresencia(presentes)] ?? 0;
+  const noEn = (s: SistemaCatalogo) =>
+    Object.entries(r.presencia)
+      .filter(([clave]) => !clave.split('+').includes(s))
+      .reduce((total, [, k]) => total + k, 0);
+  return html`<dt>Por sistema</dt>
+    <dd>
+      <dl class="presencia">
+        ${PRESENCIAS.filter(([p]) => n(p) > 0).map(
+          ([p, texto]) =>
+            html`<dt>${texto}</dt>
+              <dd><a href="${base}${rutaPresencia(p)}">${cifra(n(p))}</a></dd>`,
+        )}
+      </dl>
+    </dd>
+    <dt>No están en</dt>
+    <dd>
+      ${SISTEMAS_CATALOGO.map(
+        (s, i) =>
+          html`${i > 0 ? ' · ' : ''}<span class="tenue">${SISTEMA_EN_TEXTO[s]}</span>
+            <a href="${base}productos?no_en=${s}">${cifra(noEn(s))}</a>`,
+      )}
+    </dd>`;
+}
+
 function tarjetaCatalogo(r: ResumenCatalogo, base: string): Html {
   const fila = (texto: string, n: number, ruta: string) =>
     html`<dt>${texto}</dt>
@@ -165,7 +221,8 @@ function tarjetaCatalogo(r: ResumenCatalogo, base: string): Html {
       <a href="${base}productos">ver productos</a>
     </header>
     <dl>
-      ${fila('SKUs', r.skus, 'productos')}
+      ${fila('SKUs', r.skus, 'productos')} ${presencia(r, base)}
+      ${fila('Le falta un sistema de su alcance', r.faltaAlcance, 'productos?falta_alcance=1')}
       <dt>Leídos</dt>
       <dd>
         <span class="tenue">Coreinbox</span> ${cifra(r.leidos.coreinbox)} ·

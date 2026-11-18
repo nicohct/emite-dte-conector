@@ -461,7 +461,8 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
       name: nombre,
       sku: p.sku,
       type: 'simple' as const,
-      regular_price: typeof precio === 'number' ? String(precio) : '',
+      // Un 0 en la web es «sin precio»: se crea sin precio en vez de mostrar $0.
+      regular_price: typeof precio === 'number' && precio > 0 ? String(precio) : '',
       status: publicar ? ('publish' as const) : ('draft' as const),
     };
     const creado = await operar(

@@ -435,6 +435,8 @@ function abrirConflictos(registro: RegistroCatalogo, cambios: CambioCampo[], en:
   const porCampo = new Map<string, CambioCampo[]>();
   for (const c of cambios) {
     if (!(CAMPOS_COMPARTIDOS as readonly string[]).includes(c.campo)) continue;
+    // Quedar sin valor (la web sin precio) no es un cambio que pueda chocar con otro.
+    if (c.despues === null) continue;
     if (modoDe(reglas, c.sku, c.campo).modo !== 'ultimo') continue;
     const clave = `${c.sku}\u0000${c.campo}`;
     porCampo.set(clave, [...(porCampo.get(clave) ?? []), c]);
@@ -534,12 +536,15 @@ export function desdeCoreinbox(
   };
 }
 
-/** Precio de lista de la web (bruto, entero); vacío → sin precio. */
+/**
+ * Precio de lista de la web (bruto, entero). Vacío o 0 es «sin precio» (`null`): los productos «a
+ * cotizar» no muestran precio en la tienda, y eso no es un valor que pueda volverse canónico.
+ */
 export function precioWoo(p: ProductoWoo): number | null {
   const texto = p.regular_price?.trim();
   if (!texto) return null;
-  const n = Number(texto);
-  return Number.isFinite(n) ? Math.round(n) : null;
+  const n = Math.round(Number(texto));
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 /** Activo en la web = publicado y visible en el catálogo; borrador u oculto es inactivo. */

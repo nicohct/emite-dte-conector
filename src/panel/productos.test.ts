@@ -1268,3 +1268,81 @@ describe('tras una acción se vuelve a la fila', () => {
     expect(ancla('p', sku)).toMatch(/^p_[0-9a-f]{12}$/);
   });
 });
+
+describe('presencia por sistema y la web sin precio', () => {
+  it('flujos: la tarjeta Catálogo desglosa por sistema con enlaces a la lista filtrada', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const r = await pagina(base, 'flujos');
+    const cifraDe = (texto: string) =>
+      new RegExp(String.raw`${texto}</dt>\s*<dd><a[^>]*><span class="cifra">(\d+)</span>`).exec(
+        r.html,
+      )?.[1];
+    expect(cifraDe('En los tres')).toBe('1');
+    expect(cifraDe('Sólo en Coreinbox')).toBe('2');
+    expect(cifraDe('En Coreinbox y la web, no en Emite DTE')).toBe('1');
+    expect(cifraDe('Sólo en la web')).toBe('1');
+    expect(cifraDe('Le falta un sistema de su alcance')).toBe('4');
+    // Las combinaciones sin productos no se muestran.
+    expect(r.html).not.toContain('Sólo en Emite DTE');
+    const enlaces = hrefs(r.html);
+    expect(enlaces).toContain('./productos?en=coreinbox&en=woocommerce&en=emite');
+    expect(enlaces).toContain('./productos?en=coreinbox&no_en=woocommerce&no_en=emite');
+    expect(enlaces).toContain('./productos?no_en=woocommerce');
+    expect(enlaces).toContain('./productos?falta_alcance=1');
+    // El desglose lleva a las filas que cuenta.
+    const filas = skusDeFilas(
+      (await pagina(base, 'productos?en=coreinbox&no_en=woocommerce&no_en=emite')).html,
+    );
+    expect(filas).toEqual(['SKU-002', 'SKU-003']);
+  });
+
+  it('productos: «está en» y «no está en» filtran, quedan marcados y viajan con la página', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const filas = async (q: string) => skusDeFilas((await pagina(base, `productos?${q}`)).html);
+    expect(await filas('en=coreinbox&en=woocommerce&en=emite')).toEqual(['SKU-001']);
+    expect(await filas('no_en=woocommerce')).toEqual(['SKU-002', 'SKU-003']);
+    expect(await filas('en=woocommerce&no_en=coreinbox&no_en=emite')).toEqual(['SKU-006']);
+    expect(await filas('falta_alcance=1')).toEqual(['SKU-002', 'SKU-003', 'SKU-005', 'SKU-006']);
+    const r = await pagina(base, 'productos?en=coreinbox&no_en=woocommerce');
+    expect(r.html).toContain('<legend>Está en</legend>');
+    expect(r.html).toContain('<legend>No está en</legend>');
+    expect(r.html).toMatch(/name="en"\s+value="coreinbox"\s+checked/);
+    expect(r.html).toMatch(/name="no_en"\s+value="woocommerce"\s+checked/);
+    expect(r.html).not.toMatch(/name="en"\s+value="woocommerce"\s+checked/);
+    expect(r.html).toContain('le falta un sistema de su alcance');
+    expect(r.html).not.toContain('sin SKU en algún sistema');
+    const volver = sinEntidades(/name="volver" value="([^"]*)"/.exec(r.html)?.[1] ?? '');
+    expect(volver).toBe('productos?en=coreinbox&no_en=woocommerce');
+  });
+
+  it('productos: no estar en la web sin aprobación es normal; sólo lo del alcance «falta»', async () => {
+    const m = await cargado();
+    const base = await levantar(m);
+    const r = await pagina(base, 'productos?q=SKU-003');
+    // SKU-003: sólo en Coreinbox, propuesto para la web. Le falta Emite DTE; la web no.
+    expect(r.html).toContain('Emite DTE (falta)');
+    expect(r.html).not.toContain('Web (falta)');
+    expect(r.html).toMatch(/title="No está, y no es de su alcance"\s*><s>Web<\/s>/);
+  });
+
+  it('la web sin precio se muestra «sin precio» en la lista, el detalle y los sin SKU', async () => {
+    const mundo = mundoInicial();
+    const valvula = mundo.woo.find((w) => w.id === 11);
+    if (valvula) valvula.regular_price = '0';
+    const oferta = mundo.woo.find((w) => w.id === 17);
+    if (oferta) oferta.regular_price = '';
+    const m = await cargado(mundo);
+    const base = await levantar(m);
+    const lista = await pagina(base, 'productos?q=SKU-001');
+    expect(lista.html).toMatch(
+      /<dt>Web<\/dt>\s*<dd[^>]*>\s*<span class="tenue" title="La tienda no muestra precio">sin precio<\/span>/,
+    );
+    expect(lista.html).not.toContain('$ <span class="cifra">0</span>');
+    const detalle = await pagina(base, 'productos/SKU-001');
+    expect(detalle.html).toContain('sin precio');
+    const sinSku = await pagina(base, 'productos?vista=sin_sku&sistema=woocommerce');
+    expect(sinSku.html).toContain('sin precio');
+  });
+});

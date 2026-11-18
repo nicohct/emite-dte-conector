@@ -2,9 +2,12 @@
  * Lectura consolidada del catálogo y acciones del panel, en JSON:
  *
  * - `GET /catalogo`: productos por SKU, paginados (`pagina`, `limite` hasta 200), con filtros
- *   `q`, `diferencias`, `conflicto`, `sin_sku`, `propuesto_web`, `historicos` y `pendientes` (con
- *   un alta o una edición del panel sin escribir). Con `vista=historicos` lista los históricos de
- *   Emite DTE con sus empates y con `vista=sin_sku` los productos sin SKU de cada sistema.
+ *   `q`, `diferencias`, `conflicto`, `falta_alcance` (le falta un sistema de su alcance; `sin_sku`
+ *   es el nombre anterior y sigue valiendo), `propuesto_web`, `historicos`, `pendientes` (con un
+ *   alta o una edición del panel sin escribir) y la presencia: `en` (está en todos esos sistemas)
+ *   y `no_en` (no está en ninguno), repetibles o separados por coma (`coreinbox`, `woocommerce`,
+ *   `emite`). Con `vista=historicos` lista los históricos de Emite DTE con sus empates y con
+ *   `vista=sin_sku` los productos sin SKU de cada sistema.
  * - `GET /catalogo/{sku}`: canónico, valor en cada sistema, tipo, alcance, visibilidad,
  *   conflictos, empates, índice de enlaces, lo que la escritura haría (`escrituras`, `crearEn`),
  *   lo pendiente del panel (`pendientes`: alta y ediciones) y sus últimos eventos de escritura.
@@ -127,6 +130,34 @@ const SI = ['true', '1', 'si', 'sí'];
 const bandera = (q: URLSearchParams, nombre: string): boolean =>
   SI.includes(q.get(nombre)?.trim().toLowerCase() ?? '');
 
+/** Los sistemas de un parámetro repetible o separado por coma; los desconocidos se ignoran. */
+function sistemasDe(q: URLSearchParams, nombre: string): SistemaCatalogo[] {
+  const pedidos = new Set(
+    q
+      .getAll(nombre)
+      .flatMap((v) => v.split(','))
+      .map((v) => v.trim().toLowerCase()),
+  );
+  return SISTEMAS_CATALOGO.filter((s) => pedidos.has(s));
+}
+
+/**
+ * La parte del filtro común a la API y al panel: «le falta un sistema de su alcance»
+ * (`falta_alcance`, antes `sin_sku`) y la presencia (`en`, `no_en`). Sólo trae lo pedido.
+ */
+export function filtroPresenciaDe(
+  q: URLSearchParams,
+  si: (q: URLSearchParams, nombre: string) => boolean = bandera,
+): Pick<FiltroCatalogo, 'faltaAlcance' | 'estaEn' | 'noEstaEn'> {
+  const estaEn = sistemasDe(q, 'en');
+  const noEstaEn = sistemasDe(q, 'no_en');
+  return {
+    ...(si(q, 'falta_alcance') || si(q, 'sin_sku') ? { faltaAlcance: true } : {}),
+    ...(estaEn.length > 0 ? { estaEn } : {}),
+    ...(noEstaEn.length > 0 ? { noEstaEn } : {}),
+  };
+}
+
 function paginacion(q: URLSearchParams): { pagina: number; limite: number } {
   const pagina = Math.max(1, Number.parseInt(q.get('pagina') ?? '', 10) || 1);
   const limite = Math.min(
@@ -170,7 +201,7 @@ function listar(registro: RegistroCatalogo, q: URLSearchParams) {
   const filtro: FiltroCatalogo = {
     diferencias: bandera(q, 'diferencias'),
     conflicto: bandera(q, 'conflicto'),
-    sinSku: bandera(q, 'sin_sku'),
+    ...filtroPresenciaDe(q),
     propuestoWeb: bandera(q, 'propuesto_web'),
     historicos: bandera(q, 'historicos'),
     pendientes: bandera(q, 'pendientes'),

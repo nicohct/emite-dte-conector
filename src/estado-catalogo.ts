@@ -299,8 +299,15 @@ export interface FiltroCatalogo {
   q?: string;
   diferencias?: boolean;
   conflicto?: boolean;
-  /** Le falta alguno de los sistemas de su alcance. */
-  sinSku?: boolean;
+  /**
+   * Le falta alguno de los sistemas de su alcance (la web sólo es de su alcance si está aprobado
+   * para ella: no estar en la web es normal).
+   */
+  faltaAlcance?: boolean;
+  /** Está (tiene lectura con SKU) en todos estos sistemas. */
+  estaEn?: SistemaCatalogo[];
+  /** No está en ninguno de estos sistemas. */
+  noEstaEn?: SistemaCatalogo[];
   propuestoWeb?: boolean;
   /** Tiene algún histórico de Emite DTE propuesto como empate. */
   historicos?: boolean;
@@ -310,8 +317,15 @@ export interface FiltroCatalogo {
   pendientes?: boolean;
 }
 
+/** En qué sistemas está un SKU, como clave: los presentes en orden, unidos por `+` (o `ninguno`). */
+export type ClavePresencia = string;
+
 export interface ResumenCatalogo {
   skus: number;
+  /** SKUs por combinación de sistemas donde están (`coreinbox+emite`, `woocommerce`, …). */
+  presencia: Record<ClavePresencia, number>;
+  /** SKUs a los que les falta un sistema de su alcance. */
+  faltaAlcance: number;
   /** Productos leídos por sistema, con y sin SKU (en Emite DTE, también los históricos). */
   leidos: Record<SistemaCatalogo, number>;
   historicos: number;
@@ -320,6 +334,14 @@ export interface ResumenCatalogo {
   empatesPropuestos: number;
   sinSku: number;
 }
+
+export const clavePresencia = (presentes: readonly SistemaCatalogo[]): ClavePresencia =>
+  presentes.length > 0
+    ? SISTEMAS_CATALOGO.filter((s) => presentes.includes(s)).join('+')
+    : 'ninguno';
+
+/** Versión de lo guardado; `migrar` lleva lo anterior a ella. */
+export const VERSION_REGISTRO = 2;
 
 type Fila = Record<string, unknown>;
 const json = (v: unknown): string => JSON.stringify(v);
@@ -417,6 +439,54 @@ export class RegistroCatalogo {
     agregarColumna(db, 'catalogo_empates', 'resultado', 'TEXT');
     agregarColumna(db, 'catalogo_empates', 'resultado_en', 'TEXT');
     agregarColumna(db, 'catalogo_empates', 'resultado_detalle', 'TEXT');
+  }
+
+  /**
+   * Pone al día lo guardado por versiones anteriores del conector; idempotente. Devuelve si subió
+   * de versión: entonces hay que recalcular el catálogo (es derivado de las lecturas y la versión
+   * nueva puede calcularlo distinto aunque no haya tocado ninguna fila).
+   *
+   * - **2:** el precio 0 de la web es «sin precio». Las lecturas guardadas con 0 pasan a `null`
+   *   (también las de los sin SKU), y los conflictos abiertos de precio pierden ese 0: si ya no
+   *   quedan dos valores distintos, el conflicto se borra (era un artefacto de leer el 0 como
+   *   precio, no una decisión).
+   */
+  migrar(): boolean {
+    const version = Number(this.claves.leer('catalogo_version') ?? '1');
+    if (version >= VERSION_REGISTRO) return false;
+    this.transaccion(() => {
+      if (version < 2) {
+        this.db
+          .prepare(
+            `UPDATE catalogo_campos SET valor = 'null'
+             WHERE sistema = 'woocommerce' AND campo = 'precio' AND valor != 'null'
+               AND CAST(valor AS REAL) <= 0`,
+          )
+          .run();
+        this.db
+          .prepare(
+            `UPDATE catalogo_sin_sku SET precio = NULL WHERE sistema = 'woocommerce' AND precio <= 0`,
+          )
+          .run();
+        for (const c of this.conflictosAbiertos()) {
+          const web = c.valores.woocommerce;
+          if (c.campo !== 'precio' || !web || (typeof web.valor === 'number' && web.valor > 0)) {
+            continue;
+          }
+          const { woocommerce: _, ...resto } = c.valores;
+          const distintos = new Set(Object.values(resto).map((v) => json(v?.valor ?? null)));
+          if (distintos.size >= 2) {
+            this.db
+              .prepare('UPDATE catalogo_conflictos SET valores = ? WHERE id = ?')
+              .run(json(resto), c.id);
+          } else {
+            this.db.prepare('DELETE FROM catalogo_conflictos WHERE id = ?').run(c.id);
+          }
+        }
+      }
+      this.claves.guardar('catalogo_version', String(VERSION_REGISTRO));
+    });
+    return true;
   }
 
   /**
@@ -726,7 +796,16 @@ export class RegistroCatalogo {
       args.push(patron, patron);
     }
     if (filtro.diferencias) donde.push('p.con_diferencias = 1');
-    if (filtro.sinSku) donde.push('p.con_faltantes = 1');
+    if (filtro.faltaAlcance) donde.push('p.con_faltantes = 1');
+    // Presencia: la tabla de ids tiene la lectura con SKU de cada sistema (clave sku, sistema).
+    for (const s of filtro.estaEn ?? []) {
+      donde.push('EXISTS (SELECT 1 FROM catalogo_ids i WHERE i.sku = p.sku AND i.sistema = ?)');
+      args.push(s);
+    }
+    for (const s of filtro.noEstaEn ?? []) {
+      donde.push('NOT EXISTS (SELECT 1 FROM catalogo_ids i WHERE i.sku = p.sku AND i.sistema = ?)');
+      args.push(s);
+    }
     if (filtro.propuestoWeb) donde.push(`p.visibilidad_web = 'propuesto'`);
     if (filtro.rechazadoPorCategoria) {
       donde.push(
@@ -1397,8 +1476,23 @@ export class RegistroCatalogo {
     for (const f of porSistema) leidos[f.sistema] = f.n;
     const historicos = uno('SELECT COUNT(*) AS n FROM catalogo_historicos');
     leidos.emite += historicos;
+    const presencia: Record<ClavePresencia, number> = {};
+    const combinaciones = this.db
+      .prepare(
+        `SELECT ${SISTEMAS_CATALOGO.map(
+          (s) =>
+            `EXISTS (SELECT 1 FROM catalogo_ids i WHERE i.sku = p.sku AND i.sistema = '${s}') AS ${s}`,
+        ).join(', ')}, COUNT(*) AS n
+         FROM catalogo_productos p GROUP BY ${SISTEMAS_CATALOGO.join(', ')}`,
+      )
+      .all() as Array<Record<SistemaCatalogo | 'n', number>>;
+    for (const f of combinaciones) {
+      presencia[clavePresencia(SISTEMAS_CATALOGO.filter((s) => f[s] === 1))] = f.n;
+    }
     return {
       skus: uno('SELECT COUNT(*) AS n FROM catalogo_productos'),
+      presencia,
+      faltaAlcance: uno('SELECT COUNT(*) AS n FROM catalogo_productos WHERE con_faltantes = 1'),
       leidos,
       historicos,
       conDiferencias: uno('SELECT COUNT(*) AS n FROM catalogo_productos WHERE con_diferencias = 1'),

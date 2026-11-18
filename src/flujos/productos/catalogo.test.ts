@@ -479,3 +479,50 @@ describe('API del catálogo', () => {
     expect(estado.catalogo.reglas().filter((x) => x.ambito === 'SKU-001')).toEqual([]);
   });
 });
+
+describe('presencia por sistema', () => {
+  // Tras leer el mundo de siempre: SKU-001 en los tres, SKU-002 y SKU-003 sólo en Coreinbox (los de
+  // Emite DTE son históricos), SKU-005 en Coreinbox y la web, SKU-006 sólo en la web.
+  it('el registro filtra por «está en» y «no está en» y cuenta cada combinación', async () => {
+    const { estado } = await cargado();
+    const r = estado.catalogo;
+    const skus = (f: Parameters<typeof r.listar>[0]) => r.listar(f, 1, 50).items.map((p) => p.sku);
+    expect(skus({ estaEn: ['coreinbox', 'woocommerce', 'emite'] })).toEqual(['SKU-001']);
+    expect(skus({ estaEn: ['coreinbox'], noEstaEn: ['woocommerce', 'emite'] })).toEqual([
+      'SKU-002',
+      'SKU-003',
+    ]);
+    expect(skus({ estaEn: ['woocommerce'], noEstaEn: ['coreinbox', 'emite'] })).toEqual([
+      'SKU-006',
+    ]);
+    expect(skus({ noEstaEn: ['woocommerce'] })).toEqual(['SKU-002', 'SKU-003']);
+    expect(skus({ noEstaEn: ['emite'] })).toEqual(['SKU-002', 'SKU-003', 'SKU-005', 'SKU-006']);
+    expect(skus({ estaEn: ['emite'], noEstaEn: ['coreinbox'] })).toEqual([]);
+    expect(skus({ estaEn: ['coreinbox'], q: 'Bomba' })).toEqual(['SKU-005']);
+    expect(r.resumen()).toMatchObject({
+      presencia: {
+        'coreinbox+woocommerce+emite': 1,
+        coreinbox: 2,
+        'coreinbox+woocommerce': 1,
+        woocommerce: 1,
+      },
+      faltaAlcance: 4,
+    });
+  });
+
+  it('GET /catalogo acepta en y no_en, repetidos o con coma, y falta_alcance (o sin_sku)', async () => {
+    const { estado } = await cargado();
+    const pedir = await api(estado);
+    const skus = async (q: string) =>
+      ((await pedir(`/catalogo?${q}`)).cuerpo.items as Array<{ sku: string }>).map((p) => p.sku);
+    expect(await skus('en=coreinbox&en=woocommerce&en=emite')).toEqual(['SKU-001']);
+    expect(await skus('en=coreinbox,emite&no_en=woocommerce')).toEqual([]);
+    expect(await skus('en=coreinbox&no_en=woocommerce,emite')).toEqual(['SKU-002', 'SKU-003']);
+    expect(await skus('no_en=woocommerce')).toEqual(['SKU-002', 'SKU-003']);
+    expect(await skus('en=woocommerce&no_en=coreinbox')).toEqual(['SKU-006']);
+    // Un sistema desconocido se ignora.
+    expect(await skus('en=otro')).toHaveLength(5);
+    expect(await skus('falta_alcance=1')).toEqual(['SKU-002', 'SKU-003', 'SKU-005', 'SKU-006']);
+    expect(await skus('sin_sku=true')).toEqual(await skus('falta_alcance=true'));
+  });
+});

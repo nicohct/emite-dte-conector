@@ -14,7 +14,7 @@ import type {
 } from '../estado-catalogo.js';
 import { CAMPOS_CATALOGO, CAMPOS_COMPARTIDOS, SISTEMAS_CATALOGO } from '../estado-catalogo.js';
 import type { NombreAccion } from '../flujos/productos/acciones.js';
-import { detalleDe } from '../flujos/productos/api.js';
+import { detalleDe, filtroPresenciaDe } from '../flujos/productos/api.js';
 import { CAMPOS_ULTIMO_CAMBIO } from '../flujos/productos/canonico.js';
 import { ancla } from './formularios.js';
 import {
@@ -56,6 +56,18 @@ export function valor(campo: CampoCatalogo, v: ValorCampo | undefined): Html | s
   if (typeof v === 'boolean') return v ? 'sí' : 'no';
   if (campo === 'precio' && typeof v === 'number') return html`$ ${cifra(v)}`;
   return String(v);
+}
+
+/** Lo leído en un sistema: en la web, un precio vacío o 0 es «sin precio» (no muestra precio). */
+export function valorEn(
+  sistema: SistemaCatalogo,
+  campo: CampoCatalogo,
+  v: ValorCampo | undefined,
+): Html | string {
+  if (sistema === 'woocommerce' && campo === 'precio' && (v === null || v === undefined)) {
+    return html`<span class="tenue" title="La tienda no muestra precio">sin precio</span>`;
+  }
+  return valor(campo, v);
 }
 
 /** Un formulario de acción del panel; `volver` es la pantalla a la que redirige al terminar. */
@@ -145,17 +157,22 @@ const VISIBILIDAD: Record<ProductoCatalogo['visibilidadWeb'], string> = {
 export const etiquetaVisibilidad = (v: ProductoCatalogo['visibilidadWeb']) =>
   v === 'no_aplica' ? html`<span class="tenue">no aplica</span>` : etiquetaEstado(VISIBILIDAD[v]);
 
-const alcance = (p: ProductoCatalogo) =>
-  p.alcance.length
-    ? p.alcance.map(
-        (s) =>
-          html`<span
-              class="${p.faltaEn.includes(s) ? 'aviso' : ''}"
-              title="${p.faltaEn.includes(s) ? 'le falta este sistema' : ''}"
-              >${NOMBRE_SISTEMA[s]}${p.faltaEn.includes(s) ? ' (falta)' : ''}</span
+/**
+ * Dónde está el SKU: cada sistema donde está; el que le falta de su alcance, marcado «(falta)»; y
+ * el que no está ni le corresponde (la web sin aprobar), tenue y sin marca, porque es normal.
+ */
+const sistemas = (p: ProductoCatalogo) =>
+  SISTEMAS_CATALOGO.map((s) =>
+    p.presentes.includes(s)
+      ? html`<span>${NOMBRE_SISTEMA[s]}</span><br />`
+      : p.faltaEn.includes(s)
+        ? html`<span class="aviso" title="Falta en un sistema de su alcance"
+              >${NOMBRE_SISTEMA[s]} (falta)</span
+            ><br />`
+        : html`<span class="tenue" title="No está, y no es de su alcance"
+              ><s>${NOMBRE_SISTEMA[s]}</s></span
             ><br />`,
-      )
-    : nada;
+  );
 
 /** El canónico y, debajo, el valor de cada sistema donde está el SKU (los distintos, marcados). */
 function celdaCampo(
@@ -173,7 +190,7 @@ function celdaCampo(
             <dd
               class="${distinto && JSON.stringify(valores[s]) !== JSON.stringify(c?.valor) ? 'distinto' : ''}"
             >
-              ${valor(campo, valores[s])}
+              ${valorEn(s, campo, valores[s])}
             </dd>`,
       )}
     </dl>`;
@@ -189,10 +206,12 @@ export interface FiltroPanelCatalogo {
   porPagina: number;
 }
 
-const BANDERAS: Array<[keyof Omit<FiltroCatalogo, 'q'>, string, string]> = [
+type BanderaCatalogo = keyof Omit<FiltroCatalogo, 'q' | 'estaEn' | 'noEstaEn'>;
+
+const BANDERAS: Array<[BanderaCatalogo, string, string]> = [
   ['diferencias', 'diferencias', 'con diferencias'],
   ['conflicto', 'conflicto', 'en conflicto'],
-  ['sinSku', 'sin_sku', 'sin SKU en algún sistema de su alcance'],
+  ['faltaAlcance', 'falta_alcance', 'le falta un sistema de su alcance'],
   ['propuestoWeb', 'propuesto_web', 'propuesto para la web'],
   ['historicos', 'historicos', 'con históricos propuestos'],
   ['pendientes', 'pendientes', 'pendientes del panel'],
@@ -203,6 +222,11 @@ export function filtroCatalogoDe(q: URLSearchParams, porPagina: number): FiltroP
   const si = (v: string | null) => v !== null && ['1', 'true', 'si', 'sí'].includes(v);
   const filtro: FiltroCatalogo = {};
   for (const [clave, param] of BANDERAS) if (si(q.get(param))) filtro[clave] = true;
+  // `sin_sku=1` es el nombre anterior de `falta_alcance`; la presencia, como en la API.
+  Object.assign(
+    filtro,
+    filtroPresenciaDe(q, (p, nombre) => si(p.get(nombre))),
+  );
   const texto = q.get('q')?.trim();
   if (texto) filtro.q = texto.slice(0, 200);
   const sistema = q.get('sistema');
@@ -227,6 +251,8 @@ export function consultaCatalogo(f: FiltroPanelCatalogo, pagina: number): string
   } else {
     if (f.filtro.q) q.set('q', f.filtro.q);
     for (const [clave, param] of BANDERAS) if (f.filtro[clave]) q.set(param, '1');
+    for (const s of f.filtro.estaEn ?? []) q.append('en', s);
+    for (const s of f.filtro.noEstaEn ?? []) q.append('no_en', s);
   }
   if (pagina > 1) q.set('pagina', String(pagina));
   const s = q.toString();
@@ -271,7 +297,7 @@ export function pantallaProductos(
       </td>
       ${CAMPOS_COMPARTIDOS.map((c) => html`<td>${celdaCampo(p, c, valores(c))}</td>`)}
       <td>${p.tipo ?? nada}</td>
-      <td>${alcance(p)}</td>
+      <td class="nowrap">${sistemas(p)}</td>
       <td>${etiquetaVisibilidad(p.visibilidadWeb)}</td>
       <td>
         ${
@@ -304,6 +330,8 @@ export function pantallaProductos(
             ${texto}</label
           >`,
       )}
+      ${casillasPresencia('en', 'Está en', f.filtro.estaEn)}
+      ${casillasPresencia('no_en', 'No está en', f.filtro.noEstaEn)}
       <button type="submit">Filtrar</button>
       ${filtrado ? html`<a href="?">Quitar filtros</a>` : ''}
     </form>
@@ -322,7 +350,7 @@ export function pantallaProductos(
                       <th>SKU</th>
                       ${CAMPOS_COMPARTIDOS.map((c) => html`<th>${NOMBRE_CAMPO[c]}</th>`)}
                       <th>Tipo</th>
-                      <th>Alcance</th>
+                      <th>Sistemas</th>
                       <th>Web</th>
                       <th>Avisos</th>
                     </tr>
@@ -347,8 +375,32 @@ export function pantallaProductos(
     ${paginas(total, f.pagina, f.porPagina, (n) => consultaCatalogo(f, n))}
     <p class="tenue">
       Cada celda muestra el valor canónico y, debajo, el de cada sistema donde está el SKU; los que
-      difieren del canónico van marcados.
+      difieren del canónico van marcados. Que un producto no esté en todos los sistemas es normal:
+      «(falta)» marca sólo lo que le falta de su alcance (la web, si está aprobado para ella).
     </p>`;
+}
+
+/** «Está en» / «No está en»: una casilla por sistema; varias se suman (en todos, en ninguno). */
+function casillasPresencia(
+  param: 'en' | 'no_en',
+  texto: string,
+  elegidos: readonly SistemaCatalogo[] | undefined,
+): Html {
+  return html`<fieldset class="presencia">
+    <legend>${texto}</legend>
+    ${SISTEMAS_CATALOGO.map(
+      (s) =>
+        html`<label class="casilla"
+          ><input
+            type="checkbox"
+            name="${param}"
+            value="${s}"
+            ${elegidos?.includes(s) ? html` checked` : ''}
+          />
+          ${NOMBRE_SISTEMA[s]}</label
+        >`,
+    )}
+  </fieldset>`;
 }
 
 function pantallaSinSku(registro: RegistroCatalogo, f: FiltroPanelCatalogo, base: string): Html {
@@ -393,7 +445,7 @@ function pantallaSinSku(registro: RegistroCatalogo, f: FiltroPanelCatalogo, base
                       <td>${NOMBRE_SISTEMA[s.sistema]}</td>
                       <td><span class="id">${s.idExterno}</span></td>
                       <td>${s.nombre}</td>
-                      <td>${valor('precio', s.precio)}</td>
+                      <td>${valorEn(s.sistema, 'precio', s.precio)}</td>
                       <td>${valor('activo', s.activo)}</td>
                       <td>${fecha(s.modificadoEn)}</td>
                     </tr>`,
@@ -662,7 +714,7 @@ export function pantallaProducto(
               const l = d.sistemas[s];
               if (!l) return html`<td>${nada}</td>`;
               return html`<td>
-                ${valor(campo, l.valores[campo])}
+                ${valorEn(s, campo, l.valores[campo])}
                 ${l.vistoEn[campo] ? html`<br /><span class="tenue">desde ${fecha(l.vistoEn[campo] ?? null)}</span>` : ''}
               </td>`;
             })}
@@ -950,8 +1002,8 @@ export function pantallaProducto(
       <dl>
         <dt>Tipo</dt>
         <dd>${d.tipo ?? nada}</dd>
-        <dt>Alcance</dt>
-        <dd>${alcance(d)}</dd>
+        <dt>Sistemas</dt>
+        <dd>${sistemas(d)}</dd>
         <dt>Precio neto</dt>
         <dd>${d.precioNeto === null ? nada : html`$ ${d.precioNeto.toLocaleString('es-CL')}`}</dd>
         <dt>Visibilidad web</dt>

@@ -58,6 +58,8 @@ describe('Salud', () => {
           conError: 0,
           catalogo: {
             skus: 0,
+            presencia: {},
+            faltaAlcance: 0,
             leidos: { coreinbox: 0, woocommerce: 0, emite: 0 },
             historicos: 0,
             conDiferencias: 0,

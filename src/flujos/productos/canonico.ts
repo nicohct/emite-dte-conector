@@ -17,6 +17,13 @@
  *   que venga del panel (una edición o un alta). Cuando el precio sale del orden del arranque (o
  *   de un suplente del propietario), un precio mayor que 0 gana a un 0: un 0 de Coreinbox nunca
  *   pisa en la primera escritura el precio de Emite DTE.
+ * - **Precio 0 en Coreinbox:** es un error de datos, no «a cotizar». Se sigue leyendo (el 0 queda
+ *   guardado tal cual) pero no cuenta al calcular: no es canónico (ni por arranque, ni por último
+ *   cambio, ni con Coreinbox de propietario), no es diferencia ni cambio que abra conflicto, y el
+ *   producto lleva el aviso `AVISO_PRECIO_CERO_COREINBOX`. Mientras siga en 0 el hub tampoco le
+ *   escribe a Coreinbox el precio de otro sistema: lo corrige una persona allá, o desde el panel
+ *   (una edición de precio sí se escribe en Coreinbox). La alerta se cierra sola al leer un
+ *   precio mayor que 0.
  * - **Visibilidad web:** un servicio nunca va (`no_aplica`); si no, una decisión manda (lo que la
  *   lectura vio publicado en la web queda aprobado con usuario `web`); sin decisión, un producto de
  *   una categoría fuera de la web queda `rechazado` (motivo `categoria`) y el resto, incluido un
@@ -55,6 +62,27 @@ import { claveDeNombre } from './empates.js';
 import { LARGO_CATEGORIA, LARGO_NOMBRE } from './mapeo.js';
 
 export const TASA_IVA = 0.19;
+
+/** El aviso de un producto de Coreinbox con precio 0 (o menos): se corrige o elimina allá. */
+export const AVISO_PRECIO_CERO_COREINBOX =
+  'Coreinbox tiene este producto con precio 0: corregirlo o eliminarlo en Coreinbox';
+
+/**
+ * Un precio de Coreinbox de 0 o menos (también un neto que redondea a 0 en bruto): error de datos
+ * que se alerta y no cuenta como valor.
+ */
+export function esPrecioCeroCoreinbox(
+  sistema: SistemaCatalogo,
+  campo: CampoCatalogo,
+  valor: ValorCampo | undefined,
+): boolean {
+  return sistema === 'coreinbox' && campo === 'precio' && typeof valor === 'number' && valor <= 0;
+}
+
+/** La lectura de Coreinbox tiene precio 0: el producto está en alerta. */
+export function precioCeroEnCoreinbox(l: LecturaGuardada | undefined): boolean {
+  return l !== undefined && esPrecioCeroCoreinbox('coreinbox', 'precio', l.campos.precio?.valor);
+}
 
 /** Quién manda al arrancar (y en modo propietario sin regla), en orden de preferencia. */
 export const FUENTES_DE_ARRANQUE: Record<CampoCatalogo, SistemaCatalogo[]> = {
@@ -200,8 +228,11 @@ export interface EntradaCanonico {
   nombresSinSkuCoreinbox?: ReadonlySet<string>;
 }
 
-const valorDe = (l: LecturaGuardada | undefined, campo: CampoCatalogo): ValorCampo =>
-  l?.campos[campo]?.valor ?? null;
+/** Lo leído tal como cuenta para calcular: el precio 0 de Coreinbox no es un valor. */
+function valorDe(l: LecturaGuardada | undefined, campo: CampoCatalogo): ValorCampo {
+  const v = l?.campos[campo]?.valor ?? null;
+  return l && esPrecioCeroCoreinbox(l.sistema, campo, v) ? null : v;
+}
 
 const presentesEn = (e: EntradaCanonico): SistemaCatalogo[] =>
   SISTEMAS_CATALOGO.filter((s) => e.lecturas[s] !== undefined);
@@ -215,10 +246,11 @@ function edicionSuperada(e: EntradaCanonico, ed: EdicionPendiente): string | nul
   const presentes = presentesEn(e);
   const cuentan = modo.modo === 'ultimo' ? presentes : [duenoDe(modo, presentes)];
   for (const s of cuentan) {
-    const c = s ? e.lecturas[s]?.campos[ed.campo] : undefined;
+    const l = s ? e.lecturas[s] : undefined;
+    const c = l?.campos[ed.campo];
     if (
       c?.cambioEn != null &&
-      c.valor !== null &&
+      valorDe(l, ed.campo) !== null &&
       Date.parse(c.cambioEn) > Date.parse(ed.en) &&
       !igualesEn(ed.campo, c.valor, ed.valor)
     ) {
@@ -258,13 +290,30 @@ export function pendientesCerradas(
       continue;
     }
     if (p.canonico[ed.campo]?.conflicto) continue;
-    const destinos = destinosEdicion(e.reglas, e.sku, ed.campo, p.presentes);
+    const destinos = destinosDe(e, ed.campo, p.presentes);
     const falta = (p.escrituras ?? []).some(
       (w) => w.campo === ed.campo && destinos.includes(w.sistema),
     );
     if (!falta) r.push({ edicion: ed, descartadaEn: null });
   }
   return r;
+}
+
+/**
+ * Los destinos de una edición del panel: los de siempre más Coreinbox si es el precio y Coreinbox
+ * está en 0 (una edición es la forma de corregirlo desde el hub, aunque mande otro sistema).
+ */
+function destinosDe(
+  e: EntradaCanonico,
+  campo: CampoCatalogo,
+  presentes: readonly SistemaCatalogo[],
+): SistemaCatalogo[] {
+  const destinos = destinosEdicion(e.reglas, e.sku, campo, presentes);
+  return campo === 'precio' &&
+    precioCeroEnCoreinbox(e.lecturas.coreinbox) &&
+    !destinos.includes('coreinbox')
+    ? [...destinos, 'coreinbox']
+    : destinos;
 }
 
 /** Publicado en la web: `publish` y no oculto del catálogo. */
@@ -275,6 +324,8 @@ export function publicadoEnWeb(l: LecturaGuardada | undefined): boolean {
 export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   const avisos: string[] = [...(e.avisos ?? [])];
   const presentes = presentesEn(e);
+  const precioCero = precioCeroEnCoreinbox(e.lecturas.coreinbox);
+  if (precioCero) avisos.push(AVISO_PRECIO_CERO_COREINBOX);
   const conflictos = new Set(e.conflictosAbiertos.map((c) => c.campo));
   const primera = e.primeraEscritura ?? null;
   const ediciones = new Map<CampoCatalogo, EdicionPendiente>();
@@ -289,7 +340,8 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
     const modo = modoDe(e.reglas, e.sku, campo);
     /**
      * El primero del orden con valor. En precio, `dueno` (el propietario explícito o el sistema
-     * del último cambio) manda aunque tenga 0; entre los demás un precio mayor que 0 gana a un 0.
+     * del último cambio) manda aunque tenga 0 (salvo el 0 de Coreinbox, que no cuenta); entre los
+     * demás un precio mayor que 0 gana a un 0.
      */
     const primeroCon = (orden: SistemaCatalogo[], dueno?: SistemaCatalogo): ValorCanonico => {
       const con = orden
@@ -314,7 +366,7 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
       const cambios = primera
         ? orden
             .map((s) => ({ s, c: e.lecturas[s]?.campos[campo] }))
-            .filter((x) => x.c?.cambioEn && x.c.valor !== null)
+            .filter((x) => x.c?.cambioEn && valorDe(e.lecturas[x.s], campo) !== null)
             .sort((a, b) => Date.parse(b.c?.cambioEn ?? '') - Date.parse(a.c?.cambioEn ?? ''))
         : [];
       elegido = cambios[0] ? primeroCon([cambios[0].s], cambios[0].s) : primeroCon(arranque);
@@ -379,7 +431,7 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
   const precioNeto =
     typeof precio === 'number' ? netoDesdeBruto(precio, exento ? 0 : TASA_IVA) : null;
 
-  const escrituras = planificar(e, canonico, visibilidadWeb, primera, soloEn);
+  const escrituras = planificar(e, canonico, visibilidadWeb, primera, soloEn, precioCero);
   const crearEn: SistemaCatalogo[] = [];
   const nombre = canonico.nombre?.valor;
   // En Coreinbox se crea lo que nació en el panel y, con la variable, un bien publicado en la web.
@@ -433,7 +485,8 @@ export function calcularProducto(e: EntradaCanonico): ProductoCatalogo {
  * precio), salvo los campos en conflicto o sin valor canónico. En la web `activo` es el estado:
  * publicado sólo si está aprobado y activo; rechazado o `no_aplica` pasa a borrador, y a un
  * producto sin precio allá no se le pone uno salvo que venga del panel. Lo que viene del panel
- * nunca es una reversión, y una edición con propietario va sólo a él (`soloEn`).
+ * nunca es una reversión, y una edición con propietario va sólo a él (`soloEn`). A Coreinbox con
+ * precio 0 sólo le llega un precio del panel: el de otro sistema no lo «arregla» solo.
  */
 function planificar(
   e: EntradaCanonico,
@@ -441,6 +494,7 @@ function planificar(
   visibilidad: VisibilidadWeb,
   primera: string | null,
   soloEn: ReadonlyMap<CampoCatalogo, SistemaCatalogo | null>,
+  precioCero: boolean,
 ): EscrituraPlaneada[] {
   const plan: EscrituraPlaneada[] = [];
   for (const sistema of SISTEMAS_CATALOGO) {
@@ -449,7 +503,10 @@ function planificar(
     for (const campo of CAMPOS_ESCRIBIBLES[sistema]) {
       const c = canonico[campo];
       if (!c || c.conflicto) continue;
-      if (soloEn.has(campo) && soloEn.get(campo) !== sistema) continue;
+      const corrigeCero =
+        precioCero && sistema === 'coreinbox' && campo === 'precio' && c.fuente === 'panel';
+      if (precioCero && sistema === 'coreinbox' && campo === 'precio' && !corrigeCero) continue;
+      if (soloEn.has(campo) && soloEn.get(campo) !== sistema && !corrigeCero) continue;
       // Coreinbox manda en categoría y las de la web no son las suyas: lo creado desde la web queda
       // sin categoría allá hasta que alguien se la ponga en Coreinbox.
       if (

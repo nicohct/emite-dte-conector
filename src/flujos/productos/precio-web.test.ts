@@ -220,6 +220,6 @@ describe('poner al día un registro de antes (migrar)', () => {
     const r = new Estado(':memory:').catalogo;
     expect(r.migrar()).toBe(true);
     expect(r.migrar()).toBe(false);
-    expect(VERSION_REGISTRO).toBe(2);
+    expect(VERSION_REGISTRO).toBe(3);
   });
 });

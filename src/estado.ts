@@ -53,7 +53,14 @@ export type FlujoEvento = 'cotizaciones' | 'productos';
  * sistema.
  */
 export type TipoEvento =
-  'cotizacion' | 'producto' | 'webhook' | 'conflicto' | 'empate' | 'accion' | 'escritura';
+  | 'cotizacion'
+  | 'producto'
+  | 'webhook'
+  | 'conflicto'
+  | 'empate'
+  | 'accion'
+  | 'escritura'
+  | 'alerta';
 
 export interface Evento {
   flujo: FlujoEvento;
@@ -61,8 +68,8 @@ export interface Evento {
   /**
    * `creada`/`error` (cotización), `sincronizado`/`omitido`/`error` (producto), `visto`
    * (webhook), `abierto`/`resuelto` (conflicto), `propuesto`/`confirmado`/`rechazado` (empate),
-   * el nombre de la acción o `escrito`/`revertido`/`creado`/`adoptado`/`fusionado`/`error`
-   * (escritura).
+   * el nombre de la acción, `escrito`/`revertido`/`creado`/`adoptado`/`fusionado`/`error`
+   * (escritura) o `precio_cero`/`precio_corregido` (alerta de precio 0 en Coreinbox).
    */
   estado: string;
   en: string;
@@ -70,7 +77,10 @@ export interface Evento {
   idExterno: string | null;
   emiteId: string | null;
   sku: string | null;
-  /** Error, motivo, número de cotización, campo en conflicto o usuario de la acción. */
+  /**
+   * Error, motivo, número de cotización, campo en conflicto, usuario de la acción o, en una
+   * alerta, el enlace al producto en Coreinbox.
+   */
   mensaje: string | null;
   /** Número de la cotización en Coreinbox (también con error); null en los demás tipos. */
   referencia: string | null;
@@ -351,8 +361,10 @@ const EVENTOS_SQL = `
          NULL, NULL, NULL, NULL
   FROM catalogo_acciones
   UNION ALL
-  SELECT 'productos', 'escritura', estado, en, id_externo,
-         CASE WHEN sistema = 'emite' THEN id_externo END, sku, mensaje, NULL, NULL, sistema, campo
+  SELECT 'productos',
+         CASE WHEN estado IN ('precio_cero', 'precio_corregido') THEN 'alerta' ELSE 'escritura' END,
+         estado, en, id_externo, CASE WHEN sistema = 'emite' THEN id_externo END, NULLIF(sku, ''),
+         mensaje, NULL, NULL, sistema, campo
   FROM catalogo_eventos`;
 
 function condicionEventos(filtro: Omit<FiltroEventos, 'pagina' | 'porPagina'>): {

@@ -4,10 +4,11 @@
  * - `GET /catalogo`: productos por SKU, paginados (`pagina`, `limite` hasta 200), con filtros
  *   `q`, `diferencias`, `conflicto`, `falta_alcance` (le falta un sistema de su alcance; `sin_sku`
  *   es el nombre anterior y sigue valiendo), `propuesto_web`, `historicos`, `pendientes` (con un
- *   alta o una edición del panel sin escribir) y la presencia: `en` (está en todos esos sistemas)
+ *   alta o una edición del panel sin escribir), `precio_cero` (Coreinbox lo tiene con precio 0) y
+ *   la presencia: `en` (está en todos esos sistemas)
  *   y `no_en` (no está en ninguno), repetibles o separados por coma (`coreinbox`, `woocommerce`,
  *   `emite`). Con `vista=historicos` lista los históricos de Emite DTE con sus empates y con
- *   `vista=sin_sku` los productos sin SKU de cada sistema.
+ *   `vista=sin_sku` los productos sin SKU de cada sistema (`sistema` y `precio_cero` filtran).
  * - `GET /catalogo/{sku}`: canónico, valor en cada sistema, tipo, alcance, visibilidad,
  *   conflictos, empates, índice de enlaces, lo que la escritura haría (`escrituras`, `crearEn`),
  *   lo pendiente del panel (`pendientes`: alta y ediciones) y sus últimos eventos de escritura.
@@ -34,6 +35,7 @@ import type {
 import { SISTEMAS_CATALOGO } from '../../estado-catalogo.js';
 import type { Estado } from '../../estado.js';
 import { aplicarAccion, ErrorPeticion, esAccion, importarDecisiones } from './acciones.js';
+import { esPrecioCeroCoreinbox } from './canonico.js';
 
 export interface DependenciasCatalogoApi {
   estado: Estado;
@@ -195,8 +197,12 @@ function listar(registro: RegistroCatalogo, q: URLSearchParams) {
   }
   if (vista === 'sin_sku') {
     const sistema = q.get('sistema');
-    const todos = registro.sinSku();
-    return { vista, ...trozo(sistema ? todos.filter((s) => s.sistema === sistema) : todos) };
+    const cero = bandera(q, 'precio_cero');
+    const todos = registro
+      .sinSku()
+      .filter((s) => !sistema || s.sistema === sistema)
+      .filter((s) => !cero || esPrecioCeroCoreinbox(s.sistema, 'precio', s.precio));
+    return { vista, ...trozo(todos) };
   }
   const filtro: FiltroCatalogo = {
     diferencias: bandera(q, 'diferencias'),
@@ -205,6 +211,7 @@ function listar(registro: RegistroCatalogo, q: URLSearchParams) {
     propuestoWeb: bandera(q, 'propuesto_web'),
     historicos: bandera(q, 'historicos'),
     pendientes: bandera(q, 'pendientes'),
+    precioCero: bandera(q, 'precio_cero'),
   };
   const texto = q.get('q')?.trim();
   if (texto) filtro.q = texto;

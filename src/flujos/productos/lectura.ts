@@ -34,6 +34,7 @@ import {
   brutoDesdeNeto,
   calcularProducto,
   comparable,
+  esPrecioCeroCoreinbox,
   modoDe,
   pendientesCerradas,
 } from './canonico.js';
@@ -256,6 +257,7 @@ export async function pasadaLectura(d: DependenciasLectura): Promise<ResultadoLe
     r.conflictosNuevos = abrirConflictos(registro, cambios, leidoEn);
     r.camposCambiados = cambios.length;
     for (const sku of tocados) recalcular(registro, sku);
+    alertarPreciosCero(registro, (id) => d.coreinbox.urlProducto(id), leidoEn);
     nombresCambiaron ||= cambios.some((c) => c.campo === 'nombre' && c.sistema !== 'emite');
     if (historicosCambiaron || nombresCambiaron || nuevos.size > 0) {
       recalcularEmpates(registro, leidoEn);
@@ -424,6 +426,64 @@ export function recalcularEmpates(registro: RegistroCatalogo, en: string): void 
 }
 
 /**
+ * Lleva a la bitácora (`catalogo_eventos`) la entrada y la salida de cada producto de Coreinbox,
+ * con o sin SKU, de la alerta de precio 0: `precio_cero` cuando entra (no en cada pasada, mientras
+ * siga en 0) y `precio_corregido` cuando deja de estar en 0 o ya no se lee. Va por id de Coreinbox
+ * (clave `coreinbox:{id}|precio_cero`), así que ponerle o cambiarle el SKU no repite el evento. El
+ * mensaje es el enlace al producto en Coreinbox. Devuelve cuántos eventos registró.
+ */
+export function alertarPreciosCero(
+  registro: RegistroCatalogo,
+  url: (idExterno: string) => string,
+  en: string,
+): number {
+  const enCero = registro.preciosCeroCoreinbox();
+  const abiertas = registro.alertasPrecioCero();
+  let n = 0;
+  registro.transaccion(() => {
+    for (const p of enCero) {
+      if (abiertas.has(p.idExterno)) continue;
+      registro.registrarEvento({
+        en,
+        estado: 'precio_cero',
+        sku: p.sku ?? '',
+        sistema: 'coreinbox',
+        campo: 'precio',
+        antes: null,
+        valor: p.precio,
+        mensaje: url(p.idExterno),
+        idExterno: p.idExterno,
+        clave: claveAlertaPrecioCero(p.idExterno),
+      });
+      n++;
+    }
+    const siguen = new Set(enCero.map((p) => p.idExterno));
+    for (const [id, abierta] of abiertas) {
+      if (siguen.has(id)) continue;
+      const actual = registro.precioLeidoCoreinbox(id);
+      registro.registrarEvento({
+        en,
+        estado: 'precio_corregido',
+        sku: actual?.sku ?? abierta.sku,
+        sistema: 'coreinbox',
+        campo: 'precio',
+        antes: abierta.valor,
+        valor: actual?.precio ?? null,
+        mensaje: url(id),
+        idExterno: id,
+        clave: claveAlertaPrecioCero(id),
+      });
+      n++;
+    }
+  });
+  if (n > 0) log('info', 'alertas de precio 0 en Coreinbox', { eventos: n, enCero: enCero.length });
+  return n;
+}
+
+export const claveAlertaPrecioCero = (idCoreinbox: string): string =>
+  `coreinbox:${idCoreinbox}|precio_cero`;
+
+/**
  * Un conflicto es un mismo campo en «último cambio» cambiado en dos sistemas desde la última
  * pasada a valores distintos (en un campo con propietario gana el propietario y no hay conflicto).
  * Antes de la primera escritura no rige «último cambio» y tampoco hay conflictos. Devuelve cuántos
@@ -435,8 +495,9 @@ function abrirConflictos(registro: RegistroCatalogo, cambios: CambioCampo[], en:
   const porCampo = new Map<string, CambioCampo[]>();
   for (const c of cambios) {
     if (!(CAMPOS_COMPARTIDOS as readonly string[]).includes(c.campo)) continue;
-    // Quedar sin valor (la web sin precio) no es un cambio que pueda chocar con otro.
-    if (c.despues === null) continue;
+    // Quedar sin valor (la web sin precio) no es un cambio que pueda chocar con otro, ni pasar a
+    // precio 0 en Coreinbox (es un error de datos que se alerta).
+    if (c.despues === null || esPrecioCeroCoreinbox(c.sistema, c.campo, c.despues)) continue;
     if (modoDe(reglas, c.sku, c.campo).modo !== 'ultimo') continue;
     const clave = `${c.sku}\u0000${c.campo}`;
     porCampo.set(clave, [...(porCampo.get(clave) ?? []), c]);

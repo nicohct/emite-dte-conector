@@ -139,11 +139,23 @@ Campos compartidos:
   y **el hub nunca le escribe un precio a la web si allá no tiene**: sólo lo hace una decisión de una
   persona en el panel (una edición de precio o un alta). Si alguien le pone precio en la tienda,
   desde ahí vuelve a regir la regla normal; si se lo quita, los demás sistemas conservan el suyo.
-  Tampoco se escribe un 0 en la web. En Coreinbox y Emite DTE un 0 sí es un precio (ninguno de los
-  dos lo rechaza), pero cuando el precio sale del orden del arranque (o de un suplente del
-  propietario) un precio mayor que 0 gana a un 0: un 0 de Coreinbox nunca pisa en la primera
-  escritura el precio de Emite DTE. Un propietario fijado en el panel, o un cambio a 0 hecho
-  después de la primera escritura, sí manda con su 0.
+  Tampoco se escribe un 0 en la web.
+  **En Coreinbox, un precio 0 (o negativo, o un neto que redondea a 0 en bruto) es un error de
+  datos**, no «a cotizar»: el conector levanta una alerta y no lo propaga, y nunca corrige ni
+  elimina nada en Coreinbox. El 0 se sigue leyendo y queda guardado (así la alerta se cierra sola
+  cuando Coreinbox pase a tener un precio mayor que 0), pero no cuenta al calcular: no se vuelve
+  canónico (ni al arrancar, ni por último cambio, ni con Coreinbox de propietario), no es diferencia
+  ni cambio que abra conflicto y no se escribe en la web ni en Emite DTE. Si otro sistema tiene
+  precio, ese es el canónico para los demás, pero **el hub tampoco le escribe ese precio a Coreinbox
+  mientras siga en 0**: lo decide una persona, corrigiéndolo en Coreinbox o editando el precio en el
+  panel (una edición de precio sí se escribe en Coreinbox, aunque mande otro sistema, y cierra la
+  alerta). Si nadie más tiene precio, el SKU queda sin precio canónico (y no se crea en Emite DTE).
+  El producto lleva el aviso «Coreinbox tiene este producto con precio 0: corregirlo o eliminarlo en
+  Coreinbox», también los sin SKU (en la vista «Sin SKU»).
+  En Emite DTE un 0 sí es un precio (no lo rechaza), pero cuando el precio sale del orden del
+  arranque (o de un suplente del propietario) un precio mayor que 0 gana a un 0. Un propietario
+  fijado en el panel, o un cambio a 0 hecho en Emite DTE después de la primera escritura, sí manda
+  con su 0.
 - **`activo`**: en la web significa publicado y no oculto.
 
 Además se leen `tipo` (bien o servicio: `service`, `license` y `subscription` son servicio),
@@ -198,8 +210,10 @@ los conflictos, los empates y el índice.
 - **Versiones del registro.** Al arrancar, `migrar` pone al día lo guardado por una versión anterior
   y, si subió de versión, se recalcula todo el catálogo (es derivado). La versión 2 convierte el
   precio 0 de la web ya guardado en «sin precio» (también en los sin SKU) y saca ese 0 de los
-  conflictos de precio abiertos (si no quedan dos valores distintos, el conflicto se borra). No hace
-  falta releer los sistemas ni intervenir a mano.
+  conflictos de precio abiertos (si no quedan dos valores distintos, el conflicto se borra). La
+  versión 3 saca igual el precio 0 de Coreinbox de los conflictos abiertos; lo leído no cambia (el 0
+  sigue guardado y levanta la alerta), y el recálculo pone el aviso y deja de planificar escrituras
+  de ese 0. No hace falta releer los sistemas ni intervenir a mano.
 - **Reconstruibilidad.** Lo derivado (lecturas, canónico, históricos, empates propuestos, índice, sin
   SKU y cursores) se reconstruye igual leyendo los tres sistemas si se borra el SQLite; hay una prueba
   que lo verifica. Lo operativo de la escritura (marcas de eco, hora de la primera escritura, bitácora
@@ -216,12 +230,14 @@ Están pensadas para la red interna y el panel.
 - `GET /catalogo?pagina=1&limite=50` (máximo 200), con los filtros `q`, `diferencias=true`,
   `conflicto=true`, `falta_alcance=true` (le falta un sistema de su alcance; `sin_sku=true`, el
   nombre anterior, sigue valiendo), `propuesto_web=true`, `historicos=true` (tiene empates
-  propuestos), `pendientes=true` (tiene un alta o una edición del panel sin escribir) y la
+  propuestos), `pendientes=true` (tiene un alta o una edición del panel sin escribir),
+  `precio_cero=true` (Coreinbox lo tiene con precio 0) y la
   **presencia**: `en=…` (está en todos esos sistemas) y `no_en=…` (no está en ninguno), con
   `coreinbox`, `woocommerce` o `emite`, repetidos o separados por coma. Por ejemplo, «sólo en
   Coreinbox» es `en=coreinbox&no_en=woocommerce,emite` y «en Coreinbox y Emite DTE, no en la web»,
   `en=coreinbox,emite&no_en=woocommerce`. Con `vista=historicos` (y `estado=propuesto|confirmado|rechazado|sin_candidato`)
-  lista los históricos con sus empates; con `vista=sin_sku` (y `sistema=`) lista los productos sin SKU.
+  lista los históricos con sus empates; con `vista=sin_sku` (y `sistema=`, `precio_cero=true`) lista
+  los productos sin SKU.
   Responde `{ vista, pagina, limite, total, items }`.
 - `GET /catalogo/{sku}`: canónico (valor, fuente y modo), `precioNeto`, tipo, alcance, visibilidad y
   `motivoVisibilidad`, diferencias, `faltaEn`, `escrituras` y `crearEn` (lo que la próxima escritura
@@ -293,7 +309,8 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 - **Lo pendiente del panel.** Un alta manda en todos sus campos hasta que el SKU existe en todo su
   alcance; ahí se borra y el producto se calcula como cualquier otro. Una edición en «último cambio»
   se escribe en todos los sistemas; con propietario, sólo en el propietario, y la pasada siguiente
-  la propaga desde ahí. Nunca cuenta como reversión.
+  la propaga desde ahí (una edición de precio va además a Coreinbox si allá está en 0). Nunca
+  cuenta como reversión.
 - **Visibilidad.** Sólo lo `aprobado` se publica. Lo `rechazado` o `no_aplica` que ya está en la web
   pasa a borrador. Nunca se borra nada de la web.
 - **Históricos.** Un empate confirmado cuyo histórico tiene **exactamente** el SKU como código se
@@ -311,7 +328,7 @@ la escritura de antes (un solo sentido, Coreinbox → Emite DTE). Si la lectura 
 
 **Primera escritura.** La primera pasada con `PRODUCTOS_ESCRIBIR=true` aplica la regla de arranque a
 todo lo que difiera (en nombre y precio, lo de la web; en precio, si la web no tiene, lo de Coreinbox
-y si no Emite DTE, prefiriendo un precio mayor que 0) y desde ahí rige «último cambio»; los cambios
+y si no Emite DTE, prefiriendo un precio mayor que 0; un 0 de Coreinbox no cuenta) y desde ahí rige «último cambio»; los cambios
 vistos mientras sólo se leía no cuentan. Antes de encenderla, el panel y `GET /catalogo/{sku}` ya
 muestran qué se escribirá: las diferencias, `escrituras` y `crearEn`.
 
@@ -322,7 +339,10 @@ queda planeado para cuando se encienda ese sistema. Sin `WOO_URL` la web no se l
 **Eventos.** Cada escritura queda como evento `escritura` en `/panel/eventos` y en el detalle del SKU:
 `escrito`, `revertido`, `creado`, `adoptado`, `fusionado` o `error`, con el sistema y el campo. El
 resultado de cada pasada (`escritos`, `revertidos`, `creados`, `adoptados`, `fusionados`,
-`conError`, `pendientes`) queda en `ultimaPasada` de `GET /salud`. Los contadores `sincronizados`,
+`conError`, `pendientes`) queda en `ultimaPasada` de `GET /salud`. La alerta de precio 0 en Coreinbox
+queda como evento `alerta`: `precio_cero` cuando un producto (con o sin SKU) entra en ella, una sola
+vez mientras siga en 0, y `precio_corregido` cuando sale; con el id y el enlace al producto en
+Coreinbox (la URL de la API, la misma del índice). Los contadores `sincronizados`,
 `omitidos` y `conError` de `flujos.productos` son de la escritura de antes y ya no cambian.
 
 **Alcances.** En Coreinbox, `products:read` para leer y `products:write` para escribir. En Emite DTE,
@@ -481,7 +501,8 @@ Los booleanos aceptan `true`, `1`, `si` o `sí`, y `false`, `0` o `no`. Otro val
 }
 ```
 
-`flujos.productos.catalogo` trae `skus`, `leidos` por sistema (`coreinbox`, `woocommerce`, `emite`, con los históricos y los sin SKU), `historicos`, `conDiferencias`, `enConflicto`, `empatesPropuestos` (históricos con alguna propuesta, no filas) y `sinSku`.
+`flujos.productos.catalogo` trae `skus`, `leidos` por sistema (`coreinbox`, `woocommerce`, `emite`, con los históricos y los sin SKU), `historicos`, `conDiferencias`, `enConflicto`, `empatesPropuestos` (históricos con alguna propuesta, no filas), `sinSku` y `precioCeroCoreinbox`
+(`{ total, conSku, sinSku }`: productos de Coreinbox con precio 0, que hay que corregir allá).
 
 Las claves de primer nivel (`ok`, `creadas`, `conError`, `productos`) se mantienen por compatibilidad.
 `ultimaPasada` y `ultimaFalla` viven en memoria y se pierden al reiniciar. `ultimaFalla` trae sólo
@@ -503,22 +524,25 @@ dependencias, y lee todo de `Estado` (no abre el SQLite por su cuenta).
   **por sistema** —en los tres, sólo en Coreinbox, sólo en la web, en Coreinbox y Emite DTE pero no
   en la web, etc.— y cuántos no están en cada uno, los que tienen un sistema de su alcance por
   crear, leídos por sistema, históricos, con diferencias, en conflicto, empates propuestos, sin
-  SKU), cada cifra con enlace a su lista filtrada.
+  SKU, precio 0 en Coreinbox —destacado si hay alguno, con y sin SKU—), cada cifra con enlace a su
+  lista filtrada.
 - **Eventos** (`/panel/eventos`): lo último que pasó, en orden inverso: cotizaciones creadas o con
   error, webhooks recibidos, productos sincronizados u omitidos, conflictos abiertos o resueltos,
-  empates propuestos o decididos, acciones del panel y escrituras en los sistemas (con sistema y
-  campo), con enlace al SKU cuando lo hay. Filtros por
+  empates propuestos o decididos, acciones del panel, escrituras en los sistemas (con sistema y
+  campo) y alertas de datos (precio 0 en Coreinbox, con enlace al producto allá), con enlace al SKU
+  cuando lo hay. Filtros por
   consulta `?flujo=cotizaciones|productos&estado=…` (los estados de cada tipo, o el nombre de la
   acción) y `?pagina=2` (50 por página). Los enlaces a la cotización en Emite DTE usan
   `EMITE_URL_PUBLICA`.
 - **Productos** (`/panel/productos`): tabla por SKU con la foto, el valor canónico y el de cada
   sistema en nombre, precio bruto y activo (los que difieren, marcados; la web sin precio dice
-  «sin precio»), tipo, sistemas (donde está; «(falta)» sólo lo que le falta de su alcance, y
+  «sin precio» y el precio 0 de Coreinbox lleva la marca «precio 0»), tipo, sistemas (donde está; «(falta)» sólo lo que le falta de su alcance, y
   tachado y tenue el que no está ni le corresponde), visibilidad web y avisos (con la marca
   «pendiente» si tiene algo del panel sin escribir). Filtros `q`, `diferencias=1`, `conflicto=1`,
-  `falta_alcance=1` (antes `sin_sku=1`), `propuesto_web=1`, `pendientes=1`, `historicos=1` y las
+  `falta_alcance=1` (antes `sin_sku=1`), `propuesto_web=1`, `pendientes=1`, `historicos=1`,
+  `precio_cero=1` y las
   casillas **Está en** (`en=…`) y **No está en** (`no_en=…`), una por sistema, y paginación. Desde la misma pantalla, las vistas **Históricos** y **Sin SKU**
-  (`?vista=sin_sku&sistema=…`).
+  (`?vista=sin_sku&sistema=…&precio_cero=1`).
 - **Detalle** (`/panel/productos/{sku}`): valores por sistema con la hora en que se vio cada uno (la web sin precio, «sin precio»),
   reglas que le aplican, conflictos, empates con su histórico, lo que se escribirá, las últimas
   escrituras, índice de enlaces (cada URL abre el sistema en otra pestaña) y la foto principal.

@@ -15,7 +15,11 @@ import type {
 import { CAMPOS_CATALOGO, CAMPOS_COMPARTIDOS, SISTEMAS_CATALOGO } from '../estado-catalogo.js';
 import type { NombreAccion } from '../flujos/productos/acciones.js';
 import { detalleDe, filtroPresenciaDe } from '../flujos/productos/api.js';
-import { CAMPOS_ULTIMO_CAMBIO } from '../flujos/productos/canonico.js';
+import {
+  AVISO_PRECIO_CERO_COREINBOX,
+  CAMPOS_ULTIMO_CAMBIO,
+  esPrecioCeroCoreinbox,
+} from '../flujos/productos/canonico.js';
 import { ancla } from './formularios.js';
 import {
   avisoEnFila,
@@ -58,7 +62,10 @@ export function valor(campo: CampoCatalogo, v: ValorCampo | undefined): Html | s
   return String(v);
 }
 
-/** Lo leído en un sistema: en la web, un precio vacío o 0 es «sin precio» (no muestra precio). */
+/**
+ * Lo leído en un sistema: en la web, un precio vacío o 0 es «sin precio» (no muestra precio); en
+ * Coreinbox un precio 0 es un error que se marca (no cuenta y hay que corregirlo allá).
+ */
 export function valorEn(
   sistema: SistemaCatalogo,
   campo: CampoCatalogo,
@@ -66,6 +73,11 @@ export function valorEn(
 ): Html | string {
   if (sistema === 'woocommerce' && campo === 'precio' && (v === null || v === undefined)) {
     return html`<span class="tenue" title="La tienda no muestra precio">sin precio</span>`;
+  }
+  if (esPrecioCeroCoreinbox(sistema, campo, v)) {
+    return html`<span class="mal" title="${AVISO_PRECIO_CERO_COREINBOX}"
+      >${valor(campo, v)} <span class="etiqueta mal">precio 0</span></span
+    >`;
   }
   return valor(campo, v);
 }
@@ -215,6 +227,7 @@ const BANDERAS: Array<[BanderaCatalogo, string, string]> = [
   ['propuestoWeb', 'propuesto_web', 'propuesto para la web'],
   ['historicos', 'historicos', 'con históricos propuestos'],
   ['pendientes', 'pendientes', 'pendientes del panel'],
+  ['precioCero', 'precio_cero', 'precio 0 en Coreinbox'],
 ];
 
 /** Valores desconocidos se ignoran (filtro vacío, página 1). */
@@ -248,6 +261,7 @@ export function consultaCatalogo(f: FiltroPanelCatalogo, pagina: number): string
   if (f.vista === 'sin_sku') {
     q.set('vista', 'sin_sku');
     if (f.sistema) q.set('sistema', f.sistema);
+    if (f.filtro.precioCero) q.set('precio_cero', '1');
   } else {
     if (f.filtro.q) q.set('q', f.filtro.q);
     for (const [clave, param] of BANDERAS) if (f.filtro[clave]) q.set(param, '1');
@@ -404,7 +418,10 @@ function casillasPresencia(
 }
 
 function pantallaSinSku(registro: RegistroCatalogo, f: FiltroPanelCatalogo, base: string): Html {
-  const todos = registro.sinSku().filter((s) => !f.sistema || s.sistema === f.sistema);
+  const todos = registro
+    .sinSku()
+    .filter((s) => !f.sistema || s.sistema === f.sistema)
+    .filter((s) => !f.filtro.precioCero || esPrecioCeroCoreinbox(s.sistema, 'precio', s.precio));
   const trozo = todos.slice((f.pagina - 1) * f.porPagina, f.pagina * f.porPagina);
   const sistemas = html`<form class="filtros" method="get">
     <input type="hidden" name="vista" value="sin_sku" />
@@ -419,6 +436,15 @@ function pantallaSinSku(registro: RegistroCatalogo, f: FiltroPanelCatalogo, base
             </option>`,
         )}
       </select></label
+    >
+    <label class="casilla"
+      ><input
+        type="checkbox"
+        name="precio_cero"
+        value="1"
+        ${f.filtro.precioCero ? html` checked` : ''}
+      />
+      precio 0 en Coreinbox</label
     >
     <button type="submit">Filtrar</button>
   </form>`;
@@ -457,7 +483,8 @@ function pantallaSinSku(registro: RegistroCatalogo, f: FiltroPanelCatalogo, base
     }
     ${paginas(todos.length, f.pagina, f.porPagina, (n) => consultaCatalogo(f, n))}
     <p class="tenue">
-      Sin SKU no se pueden cruzar entre sistemas: hay que ponérselo en su origen.
+      Sin SKU no se pueden cruzar entre sistemas: hay que ponérselo en su origen. Un producto de
+      Coreinbox con precio 0 es un error de datos: hay que corregirlo o eliminarlo en Coreinbox.
     </p>`;
 }
 

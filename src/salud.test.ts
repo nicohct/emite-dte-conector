@@ -66,6 +66,7 @@ describe('Salud', () => {
             enConflicto: 0,
             empatesPropuestos: 0,
             sinSku: 0,
+            precioCeroCoreinbox: { total: 0, conSku: 0, sinSku: 0 },
           },
           ultimaPasada: null,
           ultimaFalla: null,

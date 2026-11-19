@@ -175,9 +175,20 @@ export interface EscrituraPlaneada {
   revierte: boolean;
 }
 
-/** Qué hizo la escritura (o qué le pasó), para `Estado.eventos`. */
+/**
+ * Qué hizo la escritura (o qué le pasó), para `Estado.eventos`. `precio_cero` y
+ * `precio_corregido` no son escrituras: son la entrada y la salida de un producto de Coreinbox de
+ * la alerta de precio 0 (el evento lleva el id de Coreinbox, y el SKU vacío si no tiene).
+ */
 export type EstadoEventoCatalogo =
-  'escrito' | 'revertido' | 'creado' | 'adoptado' | 'fusionado' | 'error';
+  | 'escrito'
+  | 'revertido'
+  | 'creado'
+  | 'adoptado'
+  | 'fusionado'
+  | 'error'
+  | 'precio_cero'
+  | 'precio_corregido';
 
 export interface EventoCatalogo {
   id: number;
@@ -315,6 +326,8 @@ export interface FiltroCatalogo {
   rechazadoPorCategoria?: boolean;
   /** Tiene un alta o una edición del panel pendiente de escribir. */
   pendientes?: boolean;
+  /** Coreinbox lo tiene con precio 0 o menos (alerta: hay que corregirlo allá). */
+  precioCero?: boolean;
 }
 
 /** En qué sistemas está un SKU, como clave: los presentes en orden, unidos por `+` (o `ninguno`). */
@@ -333,6 +346,8 @@ export interface ResumenCatalogo {
   enConflicto: number;
   empatesPropuestos: number;
   sinSku: number;
+  /** Productos de Coreinbox con precio 0 o menos (error de datos que se corrige allá). */
+  precioCeroCoreinbox: { total: number; conSku: number; sinSku: number };
 }
 
 export const clavePresencia = (presentes: readonly SistemaCatalogo[]): ClavePresencia =>
@@ -341,7 +356,21 @@ export const clavePresencia = (presentes: readonly SistemaCatalogo[]): ClavePres
     : 'ninguno';
 
 /** Versión de lo guardado; `migrar` lleva lo anterior a ella. */
-export const VERSION_REGISTRO = 2;
+export const VERSION_REGISTRO = 3;
+
+/**
+ * El precio guardado de Coreinbox (`c`, una fila de `catalogo_campos`) es 0 o menos. Los valores van
+ * en JSON: `null` es sin precio (otra moneda).
+ */
+const PRECIO_CERO_EN_CAMPO = `c.sistema = 'coreinbox' AND c.campo = 'precio' AND c.valor != 'null'
+  AND CAST(c.valor AS REAL) <= 0`;
+/** Lo mismo en una fila (`s`) de `catalogo_sin_sku`. */
+const PRECIO_CERO_SIN_SKU = `s.sistema = 'coreinbox' AND s.precio IS NOT NULL AND s.precio <= 0`;
+/** Los SKU (de `p`) cuya lectura de Coreinbox tiene precio 0 o menos. */
+const SKU_CON_PRECIO_CERO = `EXISTS (
+  SELECT 1 FROM catalogo_campos c
+  JOIN catalogo_ids i ON i.sku = c.sku AND i.sistema = c.sistema
+  WHERE c.sku = p.sku AND ${PRECIO_CERO_EN_CAMPO})`;
 
 type Fila = Record<string, unknown>;
 const json = (v: unknown): string => JSON.stringify(v);
@@ -450,11 +479,31 @@ export class RegistroCatalogo {
    *   (también las de los sin SKU), y los conflictos abiertos de precio pierden ese 0: si ya no
    *   quedan dos valores distintos, el conflicto se borra (era un artefacto de leer el 0 como
    *   precio, no una decisión).
+   * - **3:** el precio 0 de Coreinbox es un error de datos que se alerta y no se propaga. Lo leído
+   *   no cambia (el 0 sigue guardado: es lo que levanta la alerta); los conflictos abiertos de
+   *   precio pierden el 0 de Coreinbox igual que en la 2. El recálculo pone el aviso y deja de
+   *   planificar escrituras de ese 0, y la pasada siguiente registra el evento de cada uno.
    */
   migrar(): boolean {
     const version = Number(this.claves.leer('catalogo_version') ?? '1');
     if (version >= VERSION_REGISTRO) return false;
     this.transaccion(() => {
+      const sacarDeConflictos = (sistema: SistemaCatalogo, esCero: (v: ValorCampo) => boolean) => {
+        for (const c of this.conflictosAbiertos()) {
+          const v = c.valores[sistema];
+          if (c.campo !== 'precio' || !v || !esCero(v.valor)) continue;
+          const resto: Conflicto['valores'] = { ...c.valores };
+          delete resto[sistema];
+          const distintos = new Set(Object.values(resto).map((x) => json(x?.valor ?? null)));
+          if (distintos.size >= 2) {
+            this.db
+              .prepare('UPDATE catalogo_conflictos SET valores = ? WHERE id = ?')
+              .run(json(resto), c.id);
+          } else {
+            this.db.prepare('DELETE FROM catalogo_conflictos WHERE id = ?').run(c.id);
+          }
+        }
+      };
       if (version < 2) {
         this.db
           .prepare(
@@ -468,21 +517,10 @@ export class RegistroCatalogo {
             `UPDATE catalogo_sin_sku SET precio = NULL WHERE sistema = 'woocommerce' AND precio <= 0`,
           )
           .run();
-        for (const c of this.conflictosAbiertos()) {
-          const web = c.valores.woocommerce;
-          if (c.campo !== 'precio' || !web || (typeof web.valor === 'number' && web.valor > 0)) {
-            continue;
-          }
-          const { woocommerce: _, ...resto } = c.valores;
-          const distintos = new Set(Object.values(resto).map((v) => json(v?.valor ?? null)));
-          if (distintos.size >= 2) {
-            this.db
-              .prepare('UPDATE catalogo_conflictos SET valores = ? WHERE id = ?')
-              .run(json(resto), c.id);
-          } else {
-            this.db.prepare('DELETE FROM catalogo_conflictos WHERE id = ?').run(c.id);
-          }
-        }
+        sacarDeConflictos('woocommerce', (v) => !(typeof v === 'number' && v > 0));
+      }
+      if (version < 3) {
+        sacarDeConflictos('coreinbox', (v) => typeof v === 'number' && v <= 0);
       }
       this.claves.guardar('catalogo_version', String(VERSION_REGISTRO));
     });
@@ -822,6 +860,7 @@ export class RegistroCatalogo {
         `EXISTS (SELECT 1 FROM catalogo_empates e WHERE e.sku = p.sku AND e.estado = 'propuesto')`,
       );
     }
+    if (filtro.precioCero) donde.push(SKU_CON_PRECIO_CERO);
     if (filtro.pendientes) {
       donde.push(
         `(EXISTS (SELECT 1 FROM catalogo_altas a WHERE a.sku = p.sku)
@@ -1428,6 +1467,59 @@ export class RegistroCatalogo {
       );
   }
 
+  /** Los productos de Coreinbox con precio 0 o menos, con SKU (`sku`) y sin SKU (`sku` null). */
+  preciosCeroCoreinbox(): Array<{ idExterno: string; sku: string | null; precio: number }> {
+    const filas = this.db
+      .prepare(
+        `SELECT i.id_externo, i.sku, CAST(c.valor AS REAL) AS precio
+         FROM catalogo_campos c
+         JOIN catalogo_ids i ON i.sku = c.sku AND i.sistema = c.sistema
+         WHERE ${PRECIO_CERO_EN_CAMPO}
+         UNION ALL
+         SELECT s.id_externo, NULL, s.precio FROM catalogo_sin_sku s WHERE ${PRECIO_CERO_SIN_SKU}
+         ORDER BY 1`,
+      )
+      .all() as Fila[];
+    return filas.map((f) => ({
+      idExterno: f.id_externo as string,
+      sku: texto(f.sku),
+      precio: f.precio as number,
+    }));
+  }
+
+  /** El precio leído hoy de un producto de Coreinbox (con o sin SKU); null si ya no se lee. */
+  precioLeidoCoreinbox(idExterno: string): { sku: string; precio: ValorCampo } | null {
+    const conSku = this.db
+      .prepare(
+        `SELECT i.sku, c.valor FROM catalogo_ids i
+         LEFT JOIN catalogo_campos c ON c.sku = i.sku AND c.sistema = i.sistema AND c.campo = 'precio'
+         WHERE i.sistema = 'coreinbox' AND i.id_externo = ?`,
+      )
+      .get(idExterno) as Fila | undefined;
+    if (conSku)
+      return { sku: conSku.sku as string, precio: deJson<ValorCampo>(conSku.valor, null) };
+    const sinSku = this.db
+      .prepare(`SELECT precio FROM catalogo_sin_sku WHERE sistema = 'coreinbox' AND id_externo = ?`)
+      .get(idExterno) as Fila | undefined;
+    return sinSku ? { sku: '', precio: (sinSku.precio as number | null) ?? null } : null;
+  }
+
+  /**
+   * Las alertas de precio 0 abiertas en la bitácora, por id de Coreinbox: las de último evento
+   * `precio_cero` (sin un `precio_corregido` después).
+   */
+  alertasPrecioCero(): Map<string, EventoCatalogo> {
+    const filas = this.db
+      .prepare(
+        `SELECT * FROM catalogo_eventos WHERE id IN (
+           SELECT MAX(id) FROM catalogo_eventos
+           WHERE estado IN ('precio_cero', 'precio_corregido') GROUP BY clave
+         ) AND estado = 'precio_cero'`,
+      )
+      .all() as Fila[];
+    return new Map(filas.map((f) => [f.id_externo as string, eventoDesdeFila(f)]));
+  }
+
   /** El último evento de una operación (`clave`), para no repetir una misma falla. */
   ultimoEvento(clave: string): EventoCatalogo | null {
     const f = this.db
@@ -1489,6 +1581,12 @@ export class RegistroCatalogo {
     for (const f of combinaciones) {
       presencia[clavePresencia(SISTEMAS_CATALOGO.filter((s) => f[s] === 1))] = f.n;
     }
+    const conSku = uno(
+      `SELECT COUNT(*) AS n FROM catalogo_productos p WHERE ${SKU_CON_PRECIO_CERO}`,
+    );
+    const sinSkuCero = uno(
+      `SELECT COUNT(*) AS n FROM catalogo_sin_sku s WHERE ${PRECIO_CERO_SIN_SKU}`,
+    );
     return {
       skus: uno('SELECT COUNT(*) AS n FROM catalogo_productos'),
       presencia,
@@ -1503,6 +1601,7 @@ export class RegistroCatalogo {
         `SELECT COUNT(DISTINCT emite_id) AS n FROM catalogo_empates WHERE estado = 'propuesto'`,
       ),
       sinSku: uno('SELECT COUNT(*) AS n FROM catalogo_sin_sku'),
+      precioCeroCoreinbox: { total: conSku + sinSkuCero, conSku, sinSku: sinSkuCero },
     };
   }
 }

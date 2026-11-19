@@ -48,6 +48,7 @@ import { log } from '../../log.js';
 import { esTransitorio } from '../comun.js';
 import { TASA_IVA, netoDesdeBruto } from './canonico.js';
 import {
+  alertarPreciosCero,
   desdeCoreinbox,
   desdeEmite,
   desdeWoo,
@@ -646,6 +647,8 @@ export async function pasadaEscritura(d: DependenciasEscritura): Promise<Resulta
     }
     recalcular(registro, sku);
   }
+  // Un precio del panel escrito en Coreinbox cierra su alerta de precio 0 en esta misma pasada.
+  alertarPreciosCero(registro, (id) => d.coreinbox.urlProducto(id), en);
   r.revisados = intentados.size;
   return r;
 }

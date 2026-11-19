@@ -24,6 +24,8 @@ export const ESTADOS_EVENTOS: readonly string[] = [
   'propuesto',
   'confirmado',
   'rechazado',
+  'precio_cero',
+  'precio_corregido',
   ...NOMBRES_ACCIONES,
 ];
 
@@ -51,6 +53,8 @@ const CLASE_ESTADO: Record<string, string> = {
   propuesto: 'aviso',
   error: 'mal',
   rechazado: 'mal',
+  precio_cero: 'mal',
+  precio_corregido: 'bien',
 };
 
 export const etiquetaEstado = (estado: string) =>
@@ -96,6 +100,7 @@ function origenDe(e: Evento): Html {
   if (e.tipo === 'accion') return html`acción ${id}`;
   if (e.tipo === 'escritura')
     return html`${e.sistema ?? ''}${e.campo ? html` · ${e.campo}` : ''} ${id}`;
+  if (e.tipo === 'alerta') return html`Coreinbox ${id}`;
   return id;
 }
 
@@ -104,6 +109,13 @@ function detalleDe(e: Evento): Html | string {
   if (e.tipo === 'conflicto') return html`campo <strong>${e.mensaje ?? ''}</strong>`;
   if (e.tipo === 'accion')
     return e.mensaje ? html`por ${e.mensaje}` : html`<span class="tenue">sin usuario</span>`;
+  if (e.tipo === 'alerta') {
+    const texto =
+      e.estado === 'precio_cero'
+        ? 'Precio 0 en Coreinbox: corregirlo o eliminarlo allá'
+        : 'Ya no está en 0 en Coreinbox';
+    return html`${texto} · ${enlaceExterno(e.mensaje, 'ver en Coreinbox')}`;
+  }
   return e.mensaje ?? nada;
 }
 
@@ -115,6 +127,7 @@ export const NOMBRE_TIPO: Record<TipoEvento, string> = {
   empate: 'Empate de histórico',
   accion: 'Acción del panel',
   escritura: 'Escritura',
+  alerta: 'Alerta de datos',
 };
 
 function tablaEventos(eventos: Evento[], enlaces: Enlaces, base: string): Html {
@@ -211,6 +224,28 @@ function presencia(r: ResumenCatalogo, base: string): Html {
     </dd>`;
 }
 
+/**
+ * Productos de Coreinbox con precio 0: un error de datos que se corrige allá. Con alguno, destacado y
+ * con enlace a cada lista.
+ */
+function precioCero(r: ResumenCatalogo, base: string): Html {
+  const { total, conSku, sinSku } = r.precioCeroCoreinbox;
+  if (total === 0) {
+    return html`<dt>Precio 0 en Coreinbox</dt>
+      <dd>${cifra(0)}</dd>`;
+  }
+  return html`<dt class="mal"><strong>Precio 0 en Coreinbox</strong></dt>
+    <dd class="mal">
+      <strong>${cifra(total)}</strong> ·
+      <span class="tenue">con SKU</span>
+      <a href="${base}productos?precio_cero=1">${cifra(conSku)}</a> ·
+      <span class="tenue">sin SKU</span>
+      <a href="${base}productos?vista=sin_sku&amp;sistema=coreinbox&amp;precio_cero=1"
+        >${cifra(sinSku)}</a
+      >
+    </dd>`;
+}
+
 function tarjetaCatalogo(r: ResumenCatalogo, base: string): Html {
   const fila = (texto: string, n: number, ruta: string) =>
     html`<dt>${texto}</dt>
@@ -233,7 +268,7 @@ function tarjetaCatalogo(r: ResumenCatalogo, base: string): Html {
       ${fila('Con diferencias', r.conDiferencias, 'productos?diferencias=1')}
       ${fila('En conflicto', r.enConflicto, 'conflictos')}
       ${fila('Empates propuestos', r.empatesPropuestos, 'historicos?estado=propuesto')}
-      ${fila('Sin SKU', r.sinSku, 'productos?vista=sin_sku')}
+      ${fila('Sin SKU', r.sinSku, 'productos?vista=sin_sku')} ${precioCero(r, base)}
     </dl>
   </section>`;
 }

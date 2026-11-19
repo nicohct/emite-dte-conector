@@ -1014,21 +1014,21 @@ describe('calcularProducto: la web sin precio', () => {
     expect(precioEn(p, 'emite')?.valor).toBe(6990);
   });
 
-  it('en la primera escritura un 0 de Coreinbox no pisa el precio de Emite DTE', () => {
+  it('en la primera escritura un 0 de Coreinbox no pisa el precio de Emite DTE ni se corrige solo', () => {
     const p = calcularProducto(
       entrada({ lecturas: tres(null, 0, 5990), primeraEscritura: PRIMERA }),
     );
     expect(p.canonico.precio).toMatchObject({ valor: 5990, fuente: 'emite' });
     expect(precioEn(p, 'emite')).toBeUndefined();
-    expect(precioEn(p, 'coreinbox')?.valor).toBe(5990);
+    expect(precioEn(p, 'coreinbox')).toBeUndefined();
     expect(precioEn(p, 'woocommerce')).toBeUndefined();
   });
 
-  it('con 0 en todos lados queda el 0, pero no se le escribe a la web', () => {
+  it('con 0 en todos lados queda el 0 de Emite DTE, pero no se le escribe a nadie', () => {
     const p = calcularProducto(
       entrada({ lecturas: tres(null, 0, 0), visibilidad: decision('aprobado') }),
     );
-    expect(p.canonico.precio).toMatchObject({ valor: 0, fuente: 'coreinbox' });
+    expect(p.canonico.precio).toMatchObject({ valor: 0, fuente: 'emite' });
     expect(p.escrituras).toEqual([]);
   });
 
@@ -1056,16 +1056,15 @@ describe('calcularProducto: la web sin precio', () => {
     expect(precioEn(p, 'woocommerce')).toBeUndefined();
   });
 
-  it('un 0 puesto después en Coreinbox no se publica en la web', () => {
+  it('un 0 puesto después en Coreinbox no se publica en la web ni en Emite DTE', () => {
     const p = calcularProducto(
       entrada({
         lecturas: tres(5990, 0, 5990, { coreinbox: HORA_1 }),
         primeraEscritura: PRIMERA,
       }),
     );
-    expect(p.canonico.precio).toMatchObject({ valor: 0, fuente: 'coreinbox' });
-    expect(precioEn(p, 'emite')?.valor).toBe(0);
-    expect(precioEn(p, 'woocommerce')).toBeUndefined();
+    expect(p.canonico.precio).toMatchObject({ valor: 5990, fuente: 'woocommerce' });
+    expect(p.escrituras?.filter((w) => w.campo === 'precio')).toEqual([]);
   });
 
   it('cuando la web vuelve a tener precio, vuelve a regir la regla normal', () => {
@@ -1090,11 +1089,12 @@ describe('calcularProducto: la web sin precio', () => {
     expect(precioEn(p, 'woocommerce')).toBeUndefined();
   });
 
-  it('un propietario explícito manda aunque tenga 0', () => {
+  it('Coreinbox de propietario explícito con 0 no manda: manda el siguiente con precio', () => {
     const p = calcularProducto(
       entrada({ lecturas: tres(null, 0, 5990), reglas: [regla('*', 'precio', 'coreinbox')] }),
     );
-    expect(p.canonico.precio).toMatchObject({ valor: 0, fuente: 'coreinbox' });
+    expect(p.canonico.precio).toMatchObject({ valor: 5990, fuente: 'emite' });
+    expect(p.escrituras?.filter((w) => w.campo === 'precio')).toEqual([]);
   });
 
   it('una edición de precio del panel sí llega a la web sin precio', () => {
